@@ -1,0 +1,33 @@
+{
+  "name": "ai-toolops-manager",
+  "version": "0.1.14",
+  "description": "Local-first AI tool capability and equipment manager for AI development workflows.",
+  "type": "module",
+  "bin": {
+    "ai-toolops": "./bin/ai-toolops.js"
+  },
+  "scripts": {
+    "start": "node bin/ai-toolops.js",
+    "scan": "node bin/ai-toolops.js scan",
+    "init:demo": "node bin/ai-toolops.js init --yes",
+    "doctor": "node bin/ai-toolops.js doctor",
+    "ui": "node bin/ai-toolops.js ui",
+    "check": "node --check bin/ai-toolops.js && node --check src/cli.js && node --check src/utils.js && node --check src/scanner/projectScanner.js && node --check src/core/rollback.js && node --check src/core/doctor.js && node --check src/core/equipmentModel.js && node --check src/core/workflow.js && node --check src/core/adapterConfig.js && node --check src/core/registries.js && node --check src/core/policyGenerator.js && node --check src/adapters/agentAdapters.js && node --check src/ui/generateUi.js && node --check scripts/install-local.js",
+    "install:local": "node scripts/install-local.js",
+    "setup:project": "node bin/ai-toolops.js setup"
+  },
+  "keywords": [
+    "ai",
+    "toolops",
+    "mcp",
+    "codex",
+    "claude",
+    "roo",
+    "agent"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

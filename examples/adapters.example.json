@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "source": "ai-toolops-manager",
+  "policy": {
+    "singleSourceOfTruth": ".ai-toolops/equipment.json",
+    "generatedRuleIndex": ".ai-toolops/generated/AGENTS.toolops.md",
+    "effectivePolicy": ".ai-toolops/effective-policy.md",
+    "noManualJsonEdit": true
+  },
+  "adapters": {
+    "codex": {
+      "id": "codex",
+      "label": "Codex",
+      "enabled": true,
+      "tool": "codex-adapter",
+      "generatedFile": ".ai-toolops/generated/CODEX.toolops.md",
+      "entryFiles": ["AGENTS.md"],
+      "managedBlock": true
+    },
+    "claude": {
+      "id": "claude",
+      "label": "Claude Code",
+      "enabled": true,
+      "tool": "claude-adapter",
+      "generatedFile": ".ai-toolops/generated/CLAUDE.toolops.md",
+      "entryFiles": ["CLAUDE.md"],
+      "managedBlock": false
+    },
+    "roo": {
+      "id": "roo",
+      "label": "Roo Code",
+      "enabled": true,
+      "tool": "roo-adapter",
+      "generatedFile": ".ai-toolops/generated/ROO.toolops.md",
+      "entryFiles": [".roo/rules/toolops.md"],
+      "managedBlock": false
+    }
+  }
+}
