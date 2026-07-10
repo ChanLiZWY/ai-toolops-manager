@@ -1,0 +1,22 @@
+{
+  "$schema": "ai-toolops://plugin/tool/v1",
+  "type": "tool",
+  "name": "roo-adapter",
+  "label": "Roo Code Adapter",
+  "version": "1.0.0",
+  "description": "AI ToolOps 内置的 Roo Code 规则适配器",
+  "capabilities": ["agent_compatibility"],
+  "category": "agent_adapter",
+  "slotType": "internal_adapter",
+  "workflowStage": "agent_rules",
+  "relationGroup": "agent_rules",
+  "loadLevel": "L1",
+  "defaultTool": false,
+  "fallback": [],
+  "detection": {
+    "commands": [],
+    "files": [".ai-toolops/adapters.json", ".ai-toolops/generated/ROO.toolops.md"]
+  },
+  "install": { "hint": "由 AI ToolOps 内置提供，通过 ai-toolops adapters enable/disable 控制。" },
+  "usage": { "useWhen": ["项目使用 Roo Code"], "avoidWhen": ["不使用 Roo Code 时可关闭"] }
+}

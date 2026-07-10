@@ -16,7 +16,8 @@
   "detection": {
     "commands": ["semble"],
     "files": [],
-    "windowsCommands": ["semble.exe", "semble"]
+    "windowsCommands": ["semble.exe", "semble"],
+    "mcpServers": ["semble"]
   },
   "install": {
     "hint": "请按当前 Agent 环境安装 Semble，并确保 semble 命令可用。",

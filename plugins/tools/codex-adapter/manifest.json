@@ -1,27 +1,27 @@
 {
   "$schema": "ai-toolops://plugin/tool/v1",
   "type": "tool",
-  "name": "askhuman",
-  "label": "AskHuman",
+  "name": "codex-adapter",
+  "label": "Codex Adapter",
   "version": "1.0.0",
-  "description": "人工确认工具，用于关键问题确认、风险选择或结束反馈",
-  "capabilities": ["human_confirmation"],
-  "category": "interaction_tool",
-  "slotType": "exclusive_priority",
-  "workflowStage": "feedback",
-  "relationGroup": "human_loop",
+  "description": "AI ToolOps 内置的 Codex 规则适配器",
+  "capabilities": ["agent_compatibility"],
+  "category": "agent_adapter",
+  "slotType": "internal_adapter",
+  "workflowStage": "agent_rules",
+  "relationGroup": "agent_rules",
   "loadLevel": "L1",
   "defaultTool": true,
   "fallback": [],
   "detection": {
-    "commands": ["AskHuman.exe", "AskHuman", "askhuman"],
-    "files": []
+    "commands": [],
+    "files": [".ai-toolops/adapters.json", ".ai-toolops/generated/CODEX.toolops.md"]
   },
   "install": {
-    "hint": "请按 AskHuman 官方方式安装，并确保 AskHuman.exe 或 askhuman 命令可用。"
+    "hint": "由 AI ToolOps 内置提供，通过 ai-toolops adapters enable/disable 控制。"
   },
   "usage": {
-    "useWhen": ["问题会影响实现范围、数据来源、接口契约、验收标准或高风险操作", "本次请求结束前请求用户反馈"],
-    "avoidWhen": ["小改动", "明确修复", "普通状态同步"]
+    "useWhen": ["项目使用 Codex 或 AGENTS.md"],
+    "avoidWhen": ["不使用 Codex 时可关闭"]
   }
 }

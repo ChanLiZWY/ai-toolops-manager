@@ -1,5 +1,15 @@
 # CHANGELOG
 
+## Unreleased
+
+- 修复 Plugin/Skill 扫描器错误使用异步 `readFile` 导致扫描结果永远为空。
+- 新增 `ai-toolops skill scan`，自动发现项目级、用户级和 Codex 插件缓存中的标准 `SKILL.md`。
+- 新增 `.ai-toolops/skills.json`，Skill 启用/禁用可持久化，并同步刷新 Doctor、有效策略、Adapter 与 UI。
+- 补齐 UI `/api/plugin-scan`、`/api/skill-toggle`，配置开关和排序后不再遗留过期派生规则。
+- 修复插件 manifest 名称错位、禁用 Adapter 遗留旧文件、未验证工具冒充已安装、UI HTML 转义与白天主题问题。
+- Doctor 新增 Agent MCP 配置发现，可识别 Codex TOML 与 Claude/Roo/VS Code/Cursor 常见 JSON 配置中的已连接服务。
+- 新增 Node 内置回归测试，覆盖扫描、启停、目标项目 setup、策略、Adapter、Doctor 与 UI API。
+
 ## v0.2.0
 
 本版本新增 Plugin / Skill 系统，v0.1.x 的更新历史移至 CHANGELOG 独立管理。

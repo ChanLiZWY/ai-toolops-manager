@@ -98,16 +98,16 @@ export function parseArgs(args) {
   return { flags, positionals }
 }
 
-export function serveStatic(root, port = 4177) {
+export function serveStatic(root, port = 4177, handlers = {}) {
   const resolvedRoot = path.resolve(root)
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://localhost')
     const urlPath = decodeURIComponent(url.pathname)
 
     if (req.method === 'POST' && urlPath === '/api/toggle') {
-      readRequestJson(req).then((body) => {
+      readRequestJson(req).then(async (body) => {
         const slot = String(body.slot || '')
-        const enabled = Boolean(body.enabled)
+        const enabled = body.enabled === true || body.enabled === 'true' || body.enabled === 1
         const equipmentPath = cwdPath('.ai-toolops', 'equipment.json')
         const equipment = readJson(equipmentPath)
         if (!equipment?.slots?.[slot]) {
@@ -119,6 +119,7 @@ export function serveStatic(root, port = 4177) {
         equipment.slots[slot].updatedAt = timestamp()
         writeJson(equipmentPath, equipment)
         updateUiDataEquipment(equipment)
+        await handlers.onConfigChanged?.({ action: 'toggle', slot, enabled })
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
         res.end(JSON.stringify({ ok: true, slot, enabled }))
       }).catch((error) => {
@@ -129,7 +130,7 @@ export function serveStatic(root, port = 4177) {
     }
 
     if (req.method === 'POST' && urlPath === '/api/reorder-tools') {
-      readRequestJson(req).then((body) => {
+      readRequestJson(req).then(async (body) => {
         const slot = String(body.slot || '')
         const orderedTools = Array.isArray(body.tools) ? body.tools.map((item) => String(item || '').trim()).filter(Boolean) : []
         const equipmentPath = cwdPath('.ai-toolops', 'equipment.json')
@@ -155,8 +156,49 @@ export function serveStatic(root, port = 4177) {
         slotConfig.updatedAt = timestamp()
         writeJson(equipmentPath, equipment)
         updateUiDataEquipment(equipment)
+        await handlers.onConfigChanged?.({ action: 'reorder-tools', slot, tools: next })
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
         res.end(JSON.stringify({ ok: true, slot, tools: next, active: slotConfig.active }))
+      }).catch((error) => {
+        res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify({ ok: false, error: error.message }))
+      })
+      return
+    }
+
+    if (req.method === 'POST' && urlPath === '/api/plugin-scan') {
+      Promise.resolve(handlers.onPluginScan?.()).then((result) => {
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify({ ok: true, ...(result || {}) }))
+      }).catch((error) => {
+        res.writeHead(500, { 'content-type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify({ ok: false, error: error.message }))
+      })
+      return
+    }
+
+    if (req.method === 'POST' && urlPath === '/api/skill-toggle') {
+      readRequestJson(req).then(async (body) => {
+        const skill = String(body.skill || '').trim()
+        if (!skill) throw new Error('缺少 Skill 名称')
+        const enabled = body.enabled === true || body.enabled === 'true' || body.enabled === 1
+        const result = await handlers.onSkillToggle?.({ skill, enabled })
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify({ ok: true, skill, enabled, ...(result || {}) }))
+      }).catch((error) => {
+        res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify({ ok: false, error: error.message }))
+      })
+      return
+    }
+
+    if (req.method === 'POST' && urlPath === '/api/skill-use') {
+      readRequestJson(req).then(async (body) => {
+        const skill = String(body.skill || '').trim()
+        if (!skill) throw new Error('缺少 Skill 名称')
+        const result = await handlers.onSkillUse?.({ skill })
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify({ ok: true, skill, ...(result || {}) }))
       }).catch((error) => {
         res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
         res.end(JSON.stringify({ ok: false, error: error.message }))
@@ -185,6 +227,7 @@ export function serveStatic(root, port = 4177) {
   server.listen(port, '127.0.0.1', () => {
     console.log(`AI ToolOps UI: http://127.0.0.1:${port}`)
   })
+  return server
 }
 
 

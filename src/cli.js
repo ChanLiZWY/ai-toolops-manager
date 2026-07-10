@@ -10,7 +10,7 @@ import { generateUi } from './ui/generateUi.js'
 import { SLOT_TYPES, normalizeEquipment, promoteTool, setSlotTools, reorderSlotTools, getSlotTools } from './core/equipmentModel.js'
 import { WORKFLOW_STAGE_KEYS, normalizeWorkflowStage, workflowStageLabel } from './core/workflow.js'
 import { cwdPath, ensureDir, parseArgs, safeTimestamp, serveStatic, timestamp, writeJson, writeText, readJson, readText } from './utils.js'
-import { scanToolPlugins, scanSkillPlugins, scanAndWriteRegistry, readPluginRegistry } from './plugin/scanner.js'
+import { scanAndWriteRegistry, readPluginRegistry, recordSkillUsage, setSkillEnabled } from './plugin/scanner.js'
 
 export async function main(args) {
   const { flags, positionals } = parseArgs(args)
@@ -58,7 +58,7 @@ Commands:
   ai-toolops setup [--project 路径] [--ui]        一步初始化/升级
   ai-toolops adapters list|enable|disable [id]    管理 Agent 适配器
   ai-toolops plugin scan|list                     扫描/列出插件
-  ai-toolops skill list|enable|disable <name>     管理 Skill
+  ai-toolops skill scan|list|enable|disable|use 扫描、管理和记录 Skill 使用
   ai-toolops rollback                             恢复最近快照
 `)
 }
@@ -104,8 +104,8 @@ function writeAdapters(profile, equipment, adapterConfig, options = {}) {
   for (const [file, content] of Object.entries(adapters)) writeText(cwdPath('.ai-toolops', 'adapters', file), content)
 }
 
-function writePolicyOutputs(profile, equipment, registry, health, adapterConfig) {
-  const outputs = generatePolicyOutputs(profile, equipment, registry, health, adapterConfig)
+function writePolicyOutputs(profile, equipment, registry, health, adapterConfig, pluginRegistry) {
+  const outputs = generatePolicyOutputs(profile, equipment, registry, health, adapterConfig, pluginRegistry)
   ensureDir(cwdPath('.ai-toolops', 'generated'))
   ensureDir(cwdPath('.ai-toolops', 'generated', 'rules'))
   writeText(cwdPath('.ai-toolops', 'effective-policy.md'), outputs.effectivePolicy)
@@ -120,13 +120,43 @@ function writePolicyOutputs(profile, equipment, registry, health, adapterConfig)
 
 function refreshDerived(profile, equipment, registry, adapterConfig = null, options = {}) {
   const adapters = normalizeAdapters(adapterConfig || readJson(cwdPath('.ai-toolops', 'adapters.json')) || defaultAdapters())
+  const pluginRegistry = options.pluginRegistry || scanAndWriteRegistry()
+  mergePluginTools(registry, pluginRegistry)
+  writeJson(cwdPath('.ai-toolops', 'tool-registry.json'), registry)
   writeJson(cwdPath('.ai-toolops', 'adapters.json'), adapters)
-  const report = runDoctor(profile, equipment, registry)
+  const report = runDoctor(profile, equipment, registry, pluginRegistry)
   writeJson(cwdPath('.ai-toolops', 'health-report.json'), report)
   writeAdapters(profile, equipment, adapters, options)
-  writePolicyOutputs(profile, equipment, registry, report, adapters)
+  writePolicyOutputs(profile, equipment, registry, report, adapters, pluginRegistry)
   generateUi()
   return report
+}
+
+function mergePluginTools(registry, pluginRegistry) {
+  registry.tools ||= {}
+  for (const [name, pluginTool] of Object.entries(pluginRegistry?.tools || {})) {
+    const existing = registry.tools[name] || {}
+    registry.tools[name] = {
+      ...pluginTool,
+      ...existing,
+      name,
+      capabilities: Array.from(new Set([...(pluginTool.capabilities || []), ...(existing.capabilities || [])])),
+      _manifest: pluginTool._manifest
+    }
+  }
+  registry.updatedAt = timestamp()
+  return registry
+}
+
+function refreshCurrentProject(options = {}) {
+  const profile = scanProject()
+  writeJson(cwdPath('.ai-toolops', 'project.profile.json'), profile)
+  writeJson(cwdPath('.ai-toolops', 'project-dna.json'), buildProjectDna(profile))
+  const equipment = normalizeEquipment(readJson(cwdPath('.ai-toolops', 'equipment.json')) || buildEquipment(profile))
+  const registry = upgradeRegistry(profile, readJson(cwdPath('.ai-toolops', 'tool-registry.json')) || defaultToolRegistry(profile))
+  const adapters = normalizeAdapters(readJson(cwdPath('.ai-toolops', 'adapters.json')) || defaultAdapters())
+  const report = refreshDerived(profile, equipment, registry, adapters, options)
+  return { profile, equipment, registry, adapters, report }
 }
 
 
@@ -209,11 +239,13 @@ function init(flags) {
 }
 
 function doctor(flags = new Map()) {
-  const profile = readJson(cwdPath('.ai-toolops', 'project.profile.json')) || scanProject()
+  const profile = scanProject()
   const equipment = normalizeEquipment(readJson(cwdPath('.ai-toolops', 'equipment.json')) || buildEquipment(profile))
   const registry = upgradeRegistry(profile, readJson(cwdPath('.ai-toolops', 'tool-registry.json')) || defaultToolRegistry(profile))
   const capabilities = upgradeCapabilities(readJson(cwdPath('.ai-toolops', 'capabilities.json')) || defaultCapabilities())
   writeJson(cwdPath('.ai-toolops', 'equipment.json'), equipment)
+  writeJson(cwdPath('.ai-toolops', 'project.profile.json'), profile)
+  writeJson(cwdPath('.ai-toolops', 'project-dna.json'), buildProjectDna(profile))
   writeJson(cwdPath('.ai-toolops', 'tool-registry.json'), registry)
   writeJson(cwdPath('.ai-toolops', 'capabilities.json'), capabilities)
   const adapterConfig = normalizeAdapters(readJson(cwdPath('.ai-toolops', 'adapters.json')) || defaultAdapters())
@@ -222,9 +254,27 @@ function doctor(flags = new Map()) {
 }
 
 function ui(flags) {
-  const outDir = generateUi()
+  refreshCurrentProject()
+  const outDir = cwdPath('.ai-toolops', 'ui')
   const port = Number(flags.get('port') || 4177)
-  serveStatic(path.resolve(outDir), port)
+  serveStatic(path.resolve(outDir), port, {
+    onConfigChanged: () => refreshCurrentProject().report,
+    onPluginScan: () => {
+      const pluginRegistry = scanAndWriteRegistry()
+      refreshCurrentProject({ pluginRegistry })
+      return { tools: Object.keys(pluginRegistry.tools || {}).length, skills: Object.keys(pluginRegistry.skills || {}).length }
+    },
+    onSkillToggle: ({ skill, enabled }) => {
+      const result = setSkillEnabled(skill, enabled)
+      refreshCurrentProject({ pluginRegistry: result.registry })
+      return { skill, enabled: result.skill.enabled !== false }
+    },
+    onSkillUse: ({ skill }) => {
+      const result = recordSkillUsage(skill)
+      refreshCurrentProject({ pluginRegistry: result.registry })
+      return { skill, usageCount: result.skill.usageCount, lastUsedAt: result.skill.lastUsedAt }
+    }
+  })
 }
 
 function rollback() {
@@ -377,7 +427,7 @@ function registerTool(slotKey, toolName, flags) {
   registry.tools[toolName] = {
     ...(registry.tools[toolName] || {}),
     label: flags.get('label') || registry.tools[toolName]?.label || toolName,
-    status: flags.get('status') || registry.tools[toolName]?.status || 'user-installed',
+    status: flags.get('status') || registry.tools[toolName]?.status || 'configured',
     type: flags.get('type') || registry.tools[toolName]?.type || slot.category || 'external_tool',
     capabilities: Array.from(new Set([...(registry.tools[toolName]?.capabilities || []), slotKey])),
     installScope: flags.get('install-scope') || registry.tools[toolName]?.installScope || 'local-or-agent-env',
@@ -385,6 +435,10 @@ function registerTool(slotKey, toolName, flags) {
     cloudUpload: false,
     autoUpdate: false,
     autoBackgroundScan: false,
+    detection: {
+      commands: String(flags.get('command') || '').split(',').map((item) => item.trim()).filter(Boolean),
+      files: String(flags.get('file') || '').split(',').map((item) => item.trim()).filter(Boolean)
+    },
     installHint: flags.get('install-hint') || registry.tools[toolName]?.installHint || '请按官方方式完成安装后再接入 AI ToolOps。',
     uninstall: registry.tools[toolName]?.uninstall || '从对应本地环境或 Agent 配置中移除，并运行 ai-toolops unequip 清空槽位。'
   }
@@ -484,15 +538,14 @@ function escapeRegExp(value) {
 
 function pluginCommand(action = 'scan', args = [], flags = new Map()) {
   if (action === 'scan' || !action) {
-    const tools = scanToolPlugins()
-    const skills = scanSkillPlugins()
     const registry = scanAndWriteRegistry()
+    refreshCurrentProject({ pluginRegistry: registry })
     console.log(JSON.stringify({
       ok: true,
-      tools: Object.keys(tools).length,
-      skills: Object.keys(skills).length,
-      toolNames: Object.keys(tools),
-      skillNames: Object.keys(skills)
+      tools: Object.keys(registry.tools || {}).length,
+      skills: Object.keys(registry.skills || {}).length,
+      toolNames: Object.keys(registry.tools || {}),
+      skillNames: Object.keys(registry.skills || {})
     }, null, 2))
     return
   }
@@ -509,6 +562,13 @@ function pluginCommand(action = 'scan', args = [], flags = new Map()) {
 }
 
 function skillCommand(action = 'list', skillName = '', flags = new Map()) {
+  if (action === 'scan') {
+    const registry = scanAndWriteRegistry()
+    refreshCurrentProject({ pluginRegistry: registry })
+    console.log(JSON.stringify({ ok: true, skills: Object.keys(registry.skills || {}).length, skillNames: Object.keys(registry.skills || {}) }, null, 2))
+    return
+  }
+
   const registry = readPluginRegistry()
   const skills = registry.skills || {}
 
@@ -519,27 +579,39 @@ function skillCommand(action = 'list', skillName = '', flags = new Map()) {
         name,
         label: skill.label || name,
         description: skill.description || '',
+        descriptionZh: skill.descriptionZh || '',
         enabled: skill.enabled !== false,
+        scope: skill.scope || skill.source?.scope || '',
+        agent: skill.agent || skill.source?.agent || '',
+        promptFile: skill.promptFile || '',
         workflowStage: skill.workflowStage || '',
-        requiredTools: skill.requiredTools || []
+        requiredTools: skill.requiredTools || [],
+        category: skill.category || '',
+        categoryLabel: skill.categoryLabel || '',
+        tags: skill.tags || [],
+        usageCount: skill.usageCount || 0,
+        lastUsedAt: skill.lastUsedAt || ''
       }))
     }, null, 2))
     return
   }
 
-  if (!skillName) throw new Error('用法：ai-toolops skill list|enable|disable <name>')
+  if (!skillName) throw new Error('用法：ai-toolops skill list|enable|disable|use <name>')
 
-  if (action === 'enable') {
-    // 当前 skills 从 plugin-registry 读取，修改后写回（后续可持久化到 equipment.json）
-    console.log(JSON.stringify({ ok: true, action: 'enable', skill: skillName, note: 'Skill 启用在当前版本中为可读状态，持久化将在后续迭代实现。' }))
+  if (action === 'enable' || action === 'disable') {
+    const result = setSkillEnabled(skillName, action === 'enable')
+    refreshCurrentProject({ pluginRegistry: result.registry })
+    console.log(JSON.stringify({ ok: true, action, skill: skillName, enabled: result.skill.enabled !== false }))
     return
   }
 
-  if (action === 'disable') {
-    console.log(JSON.stringify({ ok: true, action: 'disable', skill: skillName, note: 'Skill 关闭在后续迭代实现。' }))
+  if (action === 'use') {
+    const result = recordSkillUsage(skillName)
+    refreshCurrentProject({ pluginRegistry: result.registry })
+    console.log(JSON.stringify({ ok: true, action, skill: skillName, usageCount: result.skill.usageCount, lastUsedAt: result.skill.lastUsedAt }))
     return
   }
 
-  throw new Error('用法：ai-toolops skill list|enable|disable <name>')
+  throw new Error('用法：ai-toolops skill list|enable|disable|use <name>')
 }
 

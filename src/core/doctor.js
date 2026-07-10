@@ -2,7 +2,8 @@ import { spawnSync } from 'node:child_process'
 import { cwdPath, exists, timestamp } from '../utils.js'
 import { getSlotTools, getSlotType, isPrioritySlot, normalizeEquipment } from './equipmentModel.js'
 import { WORKFLOW_STAGES, normalizeWorkflowStage } from './workflow.js'
-import { scanAndWriteRegistry, detectToolInstalled, readPluginRegistry } from '../plugin/scanner.js'
+import { detectToolInstalled, readPluginRegistry } from '../plugin/scanner.js'
+import { scanMcpServers } from '../scanner/mcpScanner.js'
 
 function add(checks, level, code, message, extra = {}) {
   checks.push({ level, code, message, ...extra })
@@ -15,14 +16,7 @@ function commandExists(command) {
   return result.status === 0
 }
 
-let _pluginCache = null
-
-function getPluginCache() {
-  if (!_pluginCache) _pluginCache = readPluginRegistry()
-  return _pluginCache
-}
-
-function getToolRuntimeStatus(toolName, tool = {}) {
+function getToolRuntimeStatus(toolName, tool = {}, pluginRegistry = {}, mcpScan = {}) {
   if (!toolName) return { status: 'empty', usable: false, verified: true }
 
   if (tool.status === 'project-provided' || tool.status === 'project_provided') {
@@ -31,16 +25,21 @@ function getToolRuntimeStatus(toolName, tool = {}) {
   if (tool.status === 'built-in' || tool.status === 'built_in') {
     return { status: 'built_in', usable: true, verified: true }
   }
-  if (tool.status === 'user-installed' || tool.status === 'installed') {
-    return { status: 'installed', usable: true, verified: false }
-  }
-
   // 优先从 Plugin Manifest 检测
-  const pluginRegistry = getPluginCache()
   const pluginManifest = pluginRegistry.tools?.[toolName]?._manifest
   if (pluginManifest) {
-    const result = detectToolInstalled(pluginManifest)
+    const result = detectToolInstalled(pluginManifest, { mcpScan })
+    return { status: result.status, usable: result.usable, verified: true, detectedBy: result.detectedBy || '', source: result.source || '' }
+  }
+
+  if (tool.detection) {
+    const result = detectToolInstalled({ detection: tool.detection, category: tool.type })
     return { status: result.status, usable: result.usable, verified: true }
+  }
+
+  // 只有“已注册”声明、没有检测契约的工具不能冒充已验证安装。
+  if (tool.status === 'user-installed' || tool.status === 'installed') {
+    return { status: 'configured_unverified', usable: false, verified: false }
   }
 
   // fallback: 已知工具硬编码兜底
@@ -94,12 +93,13 @@ function statusLabel(status) {
   }[status] || status
 }
 
-export function runDoctor(profile, equipment, registry) {
+export function runDoctor(profile, equipment, registry, pluginRegistry = readPluginRegistry()) {
   normalizeEquipment(equipment)
   const checks = []
   const slotSummaries = []
   const tools = registry.tools || {}
   const slots = equipment.slots || {}
+  const mcpScan = scanMcpServers()
 
   add(checks, exists(cwdPath('.ai-toolops')) ? 'info' : 'warning', 'config.root', exists(cwdPath('.ai-toolops')) ? '已发现 .ai-toolops 配置目录。' : '未发现 .ai-toolops 配置目录，建议先运行 ai-toolops init --yes。')
   add(checks, exists(cwdPath('.ai-toolops', 'equipment.json')) ? 'info' : 'warning', 'config.equipment', exists(cwdPath('.ai-toolops', 'equipment.json')) ? '已发现 equipment.json。' : '未发现 equipment.json。')
@@ -155,14 +155,15 @@ export function runDoctor(profile, equipment, registry) {
         add(checks, 'warning', `slot.${slotKey}.${toolName}.capabilityMismatch`, `工具 ${toolName} 未声明支持槽位 ${slotKey}。`, { slot: slotKey, slotType, category, tool: toolName, status: 'capability_mismatch' })
       }
 
-      const runtime = getToolRuntimeStatus(toolName, { ...tool, scripts: profile.scripts || {} })
+      const runtime = getToolRuntimeStatus(toolName, { ...tool, scripts: profile.scripts || {} }, pluginRegistry, mcpScan)
       const base = { slot: slotKey, slotType, category, tool: toolName, order: index + 1, status: runtime.status }
-      toolSummaries.push({ tool: toolName, label: tool.label || toolName, order: index + 1, status: runtime.status, statusLabel: statusLabel(runtime.status), usable: runtime.usable, verified: runtime.verified, type: tool.type || category })
+      toolSummaries.push({ tool: toolName, label: tool.label || toolName, order: index + 1, status: runtime.status, statusLabel: statusLabel(runtime.status), usable: runtime.usable, verified: runtime.verified, detectedBy: runtime.detectedBy || '', source: runtime.source || '', type: tool.type || category })
       if (runtime.usable) usableCount += 1
 
       if (runtime.status === 'installed') {
         const effectiveText = prioritySlot && index === 0 && enabled ? '，当前为生效工具' : prioritySlot ? '' : '，随槽位同时启用'
-        add(checks, 'info', `tool.${toolName}.installed`, `${slot.label || slotKey} 工具 ${toolName} 已安装${effectiveText}。`, base)
+        const detectionText = runtime.detectedBy === 'mcp_config' ? '（已在 Agent MCP 配置中发现）' : ''
+        add(checks, 'info', `tool.${toolName}.installed`, `${slot.label || slotKey} 工具 ${toolName} 已安装${detectionText}${effectiveText}。`, { ...base, detectedBy: runtime.detectedBy || '' })
       } else if (runtime.status === 'project_provided') {
         add(checks, 'info', `tool.${toolName}.projectProvided`, `${slot.label || slotKey} 能力由项目内置提供：${toolName}。`, base)
       } else if (runtime.status === 'built_in') {

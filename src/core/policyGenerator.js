@@ -54,10 +54,10 @@ const STAGE_RULE_FILE = {
   feedback: 'feedback.md'
 }
 
-export function generatePolicyOutputs(profile, equipment, registry, health, adapterConfig) {
+export function generatePolicyOutputs(profile, equipment, registry, health, adapterConfig, pluginRegistry = {}) {
   normalizeEquipment(equipment)
   const adapters = normalizeAdapters(adapterConfig)
-  const context = buildPolicyContext(profile, equipment, registry, health, adapters)
+  const context = buildPolicyContext(profile, equipment, registry, health, adapters, pluginRegistry)
   const ruleFiles = renderRuleFiles(context)
   return {
     effectivePolicy: renderEffectivePolicy(context),
@@ -87,7 +87,7 @@ export function renderAgentRulesInclude() {
 `
 }
 
-function buildPolicyContext(profile, equipment, registry, health, adapters) {
+function buildPolicyContext(profile, equipment, registry, health, adapters, pluginRegistry) {
   const slotHealth = new Map((health?.slots || []).map((slot) => [slot.slot, slot]))
   const slots = Object.entries(equipment.slots || {}).map(([slotKey, slot]) => {
     const tools = getSlotTools(slot)
@@ -138,7 +138,24 @@ function buildPolicyContext(profile, equipment, registry, health, adapters) {
     ruleFile: STAGE_RULE_FILE[stage.key] || `${stage.key}.md`,
     slots: slots.filter((slot) => slot.workflowStage === stage.key)
   })).filter((stage) => stage.slots.length)
-  return { generatedAt: timestamp(), profile, equipment, registry, health, adapters, slots, workflow }
+  const skills = Object.entries(pluginRegistry?.skills || {}).map(([name, skill]) => ({
+    name,
+    label: skill.label || name,
+    description: skill.description || '',
+    descriptionZh: skill.descriptionZh || '',
+    enabled: skill.enabled !== false,
+    scope: skill.scope || skill.source?.scope || 'unknown',
+    agent: skill.agent || skill.source?.agent || '',
+    promptFile: skill.promptFile || skill.source?.path || '',
+    workflowStage: skill.workflowStage || 'execution',
+    requiredTools: skill.requiredTools || [],
+    category: skill.category || 'general',
+    categoryLabel: skill.categoryLabel || '通用能力',
+    tags: skill.tags || [],
+    usageCount: Math.max(0, Number(skill.usageCount || 0)),
+    lastUsedAt: skill.lastUsedAt || ''
+  })).sort((a, b) => a.name.localeCompare(b.name))
+  return { generatedAt: timestamp(), profile, equipment, registry, health, adapters, pluginRegistry, slots, workflow, skills }
 }
 
 function renderEffectivePolicy(ctx) {
@@ -172,6 +189,10 @@ function renderEffectivePolicy(ctx) {
 
 ${renderAdapterPolicy(ctx)}
 
+## Skill 注册表
+
+${renderSkillPolicy(ctx)}
+
 ## Agent 通用执行流程
 
 ${workflowBlocks}
@@ -180,6 +201,16 @@ ${workflowBlocks}
 
 ${slotBlocks}
 `
+}
+
+function renderSkillPolicy(ctx) {
+  if (!ctx.skills.length) return '当前未发现 Skill。运行 `ai-toolops skill scan` 重新扫描项目级和用户级 Skill。'
+  return ctx.skills.map((skill) => {
+    const source = skill.promptFile ? `；入口：${skill.promptFile}` : ''
+    const tools = skill.requiredTools.length ? `；依赖：${skill.requiredTools.join(', ')}` : ''
+    const tags = skill.tags.length ? `；标签：${skill.tags.join('、')}` : ''
+    return `- ${skill.enabled ? '启用' : '关闭'}：${skill.label} (${skill.name})；场景：${skill.categoryLabel}；范围：${skill.scope}${skill.agent ? `；Agent：${skill.agent}` : ''}${source}${tools}${tags}`
+  }).join('\n')
 }
 
 function renderAdapterPolicy(ctx) {
@@ -249,6 +280,7 @@ function renderUseRules(slot) {
 function renderAgentRules(ctx) {
   const workflowSummary = ctx.workflow.map((stage) => `- ${stage.label}：${stage.slots.map((slot) => `${slot.label}(${slot.key})`).join('、')}；细则：\`.ai-toolops/generated/rules/${stage.ruleFile}\``).join('\n')
   const disabled = ctx.slots.filter((slot) => !slot.enabled).map((slot) => `- ${slot.label} (${slot.key})`).join('\n')
+  const enabledSkills = ctx.skills.filter((skill) => skill.enabled).map((skill) => `- ${skill.label} (${skill.name})${skill.promptFile ? `：${skill.promptFile}` : ''}`).join('\n')
   return `# AGENTS ToolOps Rules
 
 生成时间：${ctx.generatedAt}
@@ -272,10 +304,15 @@ ${workflowSummary || '暂无流程阶段。'}
 
 ${disabled || '当前无关闭槽位。'}
 
+## 已启用 Skills
+
+${enabledSkills || '当前无已启用 Skill。'}
+
 ## 常用按需文件
 
 - 项目检索 / Semble / rg：\`.ai-toolops/generated/rules/project-retrieval.md\`
 - 人工确认 / AskHuman / 结束反馈：\`.ai-toolops/generated/rules/feedback.md\`
+- Skill 扫描与启停状态：\`.ai-toolops/generated/rules/skills.md\`
 - 当前有效能力矩阵：\`.ai-toolops/effective-policy.md\`
 - Agent 专用规则：按 \`.ai-toolops/adapters.json\` 中启用的适配器生成；常用文件为 \`.ai-toolops/generated/CODEX.toolops.md\`、\`.ai-toolops/generated/CLAUDE.toolops.md\`、\`.ai-toolops/generated/ROO.toolops.md\`
 
@@ -303,7 +340,8 @@ function renderAgentSpecificRules(ctx, agentName) {
 
 function renderRuleFiles(ctx) {
   const files = {
-    'index.md': renderRulesIndex(ctx)
+    'index.md': renderRulesIndex(ctx),
+    'skills.md': renderSkillsRule(ctx)
   }
   for (const stage of ctx.workflow) {
     files[stage.ruleFile] = renderStageRule(stage)
@@ -311,6 +349,16 @@ function renderRuleFiles(ctx) {
   if (!files['project-retrieval.md']) files['project-retrieval.md'] = renderStandaloneProjectRetrievalRule(ctx)
   if (!files['feedback.md']) files['feedback.md'] = renderStandaloneFeedbackRule(ctx)
   return files
+}
+
+function renderSkillsRule(ctx) {
+  const rows = ctx.skills.map((skill) => {
+    const source = skill.promptFile || '未记录入口'
+    const tools = skill.requiredTools.length ? skill.requiredTools.join(', ') : '无'
+    const tags = skill.tags.length ? skill.tags.join('、') : '无'
+    return `- ${skill.enabled ? '启用' : '关闭'}：${skill.label} (${skill.name})；场景：${skill.categoryLabel}；标签：${tags}；范围：${skill.scope}；入口：${source}；必需工具：${tools}`
+  }).join('\n')
+  return `# Skill 注册表\n\n生成时间：${ctx.generatedAt}\n\nSkill 由 \`ai-toolops skill scan\` 从项目级、用户级与已安装插件目录中发现。启停必须使用 \`ai-toolops skill enable|disable <name>\`，不要手动修改 JSON。Agent 实际使用某个 Skill 完成任务后，应运行 \`ai-toolops skill use <name>\` 上报一次使用，以维护使用次数和最近使用时间。\n\n${rows || '当前未发现 Skill。'}\n`
 }
 
 function renderRulesIndex(ctx) {

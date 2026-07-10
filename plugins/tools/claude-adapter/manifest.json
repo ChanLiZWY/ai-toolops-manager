@@ -1,10 +1,10 @@
 {
   "$schema": "ai-toolops://plugin/tool/v1",
   "type": "tool",
-  "name": "roo-adapter",
-  "label": "Roo Code Adapter",
+  "name": "claude-adapter",
+  "label": "Claude Code Adapter",
   "version": "1.0.0",
-  "description": "AI ToolOps 内置的 Roo Code 规则适配器，生成 ROO.toolops.md",
+  "description": "AI ToolOps 内置的 Claude Code 规则适配器",
   "capabilities": ["agent_compatibility"],
   "category": "agent_adapter",
   "slotType": "internal_adapter",
@@ -15,13 +15,13 @@
   "fallback": [],
   "detection": {
     "commands": [],
-    "files": [".ai-toolops/adapters.json", ".ai-toolops/generated/ROO.toolops.md"]
+    "files": [".ai-toolops/adapters.json", ".ai-toolops/generated/CLAUDE.toolops.md"]
   },
   "install": {
-    "hint": "由 AI ToolOps 内置提供，不需要单独安装。通过 ai-toolops adapters enable/disable 控制。"
+    "hint": "由 AI ToolOps 内置提供，通过 ai-toolops adapters enable/disable 控制。"
   },
   "usage": {
-    "useWhen": ["项目使用 Roo Code"],
-    "avoidWhen": ["不使用 Roo Code 的项目可在 adapters.json 中关闭"]
+    "useWhen": ["项目使用 Claude Code"],
+    "avoidWhen": ["不使用 Claude Code 时可关闭"]
   }
 }

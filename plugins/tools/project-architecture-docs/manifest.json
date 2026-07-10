@@ -1,28 +1,27 @@
 {
   "$schema": "ai-toolops://plugin/tool/v1",
   "type": "tool",
-  "name": "package-scripts",
-  "label": "Package Scripts",
+  "name": "project-architecture-docs",
+  "label": "项目架构文档",
   "version": "1.0.0",
-  "description": "复用 package.json 中的 lint/test/build 脚本作为构建验证入口",
-  "capabilities": ["build_validation"],
+  "description": "复用 README、AGENTS、docs 或 architecture 目录作为项目架构上下文",
+  "capabilities": ["architecture_context"],
   "category": "project_builtin",
   "slotType": "project_context",
-  "workflowStage": "validation",
-  "relationGroup": "validation",
+  "workflowStage": "project_context",
+  "relationGroup": "repo_context",
   "loadLevel": "L1",
   "defaultTool": true,
-  "fallback": [],
+  "fallback": ["README", "AGENTS"],
   "detection": {
     "commands": [],
-    "files": ["package.json"]
+    "files": ["README.md", "AGENTS.md", "architecture/modules.yaml", "architecture/modules.summary.yaml"]
   },
   "install": {
-    "hint": "复用 package.json 中已有 lint/test/build 脚本；它是项目内置验证入口。"
+    "hint": "复用项目已有 README、AGENTS、architecture 或 docs 文档；它不是外部工具。"
   },
   "usage": {
-    "useWhen": ["运行 lint/test/build", "输出失败原因", "不自动修复无关问题"],
-    "avoidWhen": []
-  },
-  "score": { "installConvenience": 5, "uninstallConvenience": 3, "aiEfficiencyGain": 4, "tokenSaving": 3, "stability": 5, "projectFit": 5, "maintenanceCost": 1 }
+    "useWhen": ["建立项目上下文", "读取模块边界", "定位架构入口"],
+    "avoidWhen": ["不要把项目文档当成外部安装任务"]
+  }
 }

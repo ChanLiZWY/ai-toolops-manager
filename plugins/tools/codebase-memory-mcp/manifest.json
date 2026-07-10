@@ -16,7 +16,8 @@
   "detection": {
     "commands": ["codebase-memory-mcp", "codebase-memory"],
     "files": [],
-    "windowsCommands": ["codebase-memory-mcp.exe", "codebase-memory-mcp"]
+    "windowsCommands": ["codebase-memory-mcp.exe", "codebase-memory-mcp"],
+    "mcpServers": ["codebase-memory-mcp", "codebase-memory", "codebase_memory"]
   },
   "install": {
     "hint": "请安装本地 MCP server，只接入本地 Agent 客户端配置。不要默认开启上传、后台扫描或自动同步。",

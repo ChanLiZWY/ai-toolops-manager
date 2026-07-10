@@ -1,14 +1,14 @@
 import { timestamp } from '../utils.js'
 import { getSlotTools, getSlotType, isPrioritySlot, normalizeEquipment } from '../core/equipmentModel.js'
-import { enabledAdapters, normalizeAdapters } from '../core/adapterConfig.js'
+import { adapterList, enabledAdapters, normalizeAdapters } from '../core/adapterConfig.js'
 
 export function generateAdapterOutputs(profile, equipment, adapterConfig, options = {}) {
   normalizeEquipment(equipment)
   const normalized = normalizeAdapters(adapterConfig)
   const target = options.agent || 'all'
   const outputs = {}
-  for (const adapter of enabledAdapters(normalized, target)) {
-    outputs[adapter.adapterFile.replace(/^\.ai-toolops\/adapters\//, '')] = renderAdapterRules(profile, equipment, adapter, normalized)
+  for (const adapter of adapterList(normalized, target)) {
+    outputs[adapter.adapterFile.replace(/^\.ai-toolops\/adapters\//, '')] = renderGeneratedAgentFile(profile, equipment, normalized, adapter.id)
   }
   outputs['index.md'] = renderAdapterIndex(profile, normalized)
   return outputs

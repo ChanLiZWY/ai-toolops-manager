@@ -12,7 +12,8 @@
     "init:demo": "node bin/ai-toolops.js init --yes",
     "doctor": "node bin/ai-toolops.js doctor",
     "ui": "node bin/ai-toolops.js ui",
-    "check": "node --check bin/ai-toolops.js && node --check src/cli.js && node --check src/utils.js && node --check src/scanner/projectScanner.js && node --check src/core/rollback.js && node --check src/core/doctor.js && node --check src/core/equipmentModel.js && node --check src/core/workflow.js && node --check src/core/adapterConfig.js && node --check src/core/registries.js && node --check src/core/policyGenerator.js && node --check src/adapters/agentAdapters.js && node --check src/ui/generateUi.js && node --check scripts/install-local.js",
+    "check": "node --check bin/ai-toolops.js && node --check src/cli.js && node --check src/utils.js && node --check src/scanner/projectScanner.js && node --check src/scanner/mcpScanner.js && node --check src/plugin/scanner.js && node --check src/core/rollback.js && node --check src/core/doctor.js && node --check src/core/equipmentModel.js && node --check src/core/workflow.js && node --check src/core/adapterConfig.js && node --check src/core/registries.js && node --check src/core/policyGenerator.js && node --check src/adapters/agentAdapters.js && node --check src/ui/generateUi.js && node --check scripts/install-local.js && node --check test/plugin-scanner.test.js && node --check test/core-regressions.test.js",
+    "test": "node --test --test-concurrency=1",
     "install:local": "node scripts/install-local.js",
     "setup:project": "node bin/ai-toolops.js setup"
   },
