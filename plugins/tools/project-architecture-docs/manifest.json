@@ -1,0 +1,28 @@
+{
+  "$schema": "ai-toolops://plugin/tool/v1",
+  "type": "tool",
+  "name": "package-scripts",
+  "label": "Package Scripts",
+  "version": "1.0.0",
+  "description": "复用 package.json 中的 lint/test/build 脚本作为构建验证入口",
+  "capabilities": ["build_validation"],
+  "category": "project_builtin",
+  "slotType": "project_context",
+  "workflowStage": "validation",
+  "relationGroup": "validation",
+  "loadLevel": "L1",
+  "defaultTool": true,
+  "fallback": [],
+  "detection": {
+    "commands": [],
+    "files": ["package.json"]
+  },
+  "install": {
+    "hint": "复用 package.json 中已有 lint/test/build 脚本；它是项目内置验证入口。"
+  },
+  "usage": {
+    "useWhen": ["运行 lint/test/build", "输出失败原因", "不自动修复无关问题"],
+    "avoidWhen": []
+  },
+  "score": { "installConvenience": 5, "uninstallConvenience": 3, "aiEfficiencyGain": 4, "tokenSaving": 3, "stability": 5, "projectFit": 5, "maintenanceCost": 1 }
+}

@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process'
 import { cwdPath, exists, timestamp } from '../utils.js'
 import { getSlotTools, getSlotType, isPrioritySlot, normalizeEquipment } from './equipmentModel.js'
 import { WORKFLOW_STAGES, normalizeWorkflowStage } from './workflow.js'
+import { scanAndWriteRegistry, detectToolInstalled, readPluginRegistry } from '../plugin/scanner.js'
 
 function add(checks, level, code, message, extra = {}) {
   checks.push({ level, code, message, ...extra })
@@ -12,6 +13,13 @@ function commandExists(command) {
   const args = process.platform === 'win32' ? [command] : ['-v', command]
   const result = spawnSync(probe, args, { shell: process.platform !== 'win32', stdio: 'ignore' })
   return result.status === 0
+}
+
+let _pluginCache = null
+
+function getPluginCache() {
+  if (!_pluginCache) _pluginCache = readPluginRegistry()
+  return _pluginCache
 }
 
 function getToolRuntimeStatus(toolName, tool = {}) {
@@ -27,6 +35,15 @@ function getToolRuntimeStatus(toolName, tool = {}) {
     return { status: 'installed', usable: true, verified: false }
   }
 
+  // 优先从 Plugin Manifest 检测
+  const pluginRegistry = getPluginCache()
+  const pluginManifest = pluginRegistry.tools?.[toolName]?._manifest
+  if (pluginManifest) {
+    const result = detectToolInstalled(pluginManifest)
+    return { status: result.status, usable: result.usable, verified: true }
+  }
+
+  // fallback: 已知工具硬编码兜底
   if (toolName === 'rg') {
     const usable = commandExists('rg') || commandExists('ripgrep')
     return { status: usable ? 'installed' : 'configured_not_installed', usable, verified: true }

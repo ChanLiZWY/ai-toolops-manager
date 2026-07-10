@@ -1,0 +1,30 @@
+{
+  "$schema": "ai-toolops://plugin/tool/v1",
+  "type": "tool",
+  "name": "codebase-memory-mcp",
+  "label": "Codebase Memory MCP",
+  "version": "1.0.0",
+  "description": "代码图谱查询工具，用于调用链、模块依赖等跨文件分析",
+  "capabilities": ["code_graph"],
+  "category": "external_tool",
+  "slotType": "exclusive_priority",
+  "workflowStage": "project_retrieval",
+  "relationGroup": "code_structure",
+  "loadLevel": "L2",
+  "defaultTool": true,
+  "fallback": ["rg", "project-architecture-docs"],
+  "detection": {
+    "commands": ["codebase-memory-mcp", "codebase-memory"],
+    "files": [],
+    "windowsCommands": ["codebase-memory-mcp.exe", "codebase-memory-mcp"]
+  },
+  "install": {
+    "hint": "请安装本地 MCP server，只接入本地 Agent 客户端配置。不要默认开启上传、后台扫描或自动同步。",
+    "manualSteps": ["根据 Agent 类型安装对应的 codebase-memory-mcp 包"]
+  },
+  "usage": {
+    "useWhen": ["跨模块影响分析", "调用链查询", "架构重构", "大功能接手前"],
+    "avoidWhen": ["单文件小改", "纯样式修改", "已知路径修改"]
+  },
+  "score": { "installConvenience": 3, "uninstallConvenience": 4, "aiEfficiencyGain": 5, "tokenSaving": 5, "stability": 4, "projectFit": 5, "maintenanceCost": 3 }
+}

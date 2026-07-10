@@ -1,0 +1,30 @@
+{
+  "$schema": "ai-toolops://plugin/tool/v1",
+  "type": "tool",
+  "name": "semble",
+  "label": "Semble",
+  "version": "1.0.0",
+  "description": "语义搜索工具，用于入口不明确时的跨文件检索",
+  "capabilities": ["semantic_search"],
+  "category": "external_tool",
+  "slotType": "exclusive_priority",
+  "workflowStage": "project_retrieval",
+  "relationGroup": "file_lookup",
+  "loadLevel": "L1",
+  "defaultTool": true,
+  "fallback": ["rg"],
+  "detection": {
+    "commands": ["semble"],
+    "files": [],
+    "windowsCommands": ["semble.exe", "semble"]
+  },
+  "install": {
+    "hint": "请按当前 Agent 环境安装 Semble，并确保 semble 命令可用。",
+    "manualSteps": ["根据 Agent 类型安装对应的 Semble 插件"]
+  },
+  "usage": {
+    "useWhen": ["入口不明确", "调用链不明确", "需要找相似实现或模式"],
+    "avoidWhen": ["目标文件明确", "IDE 已定位", "已知组件或依赖关系明确"]
+  },
+  "score": { "installConvenience": 3, "uninstallConvenience": 4, "aiEfficiencyGain": 4, "tokenSaving": 4, "stability": 3, "projectFit": 4, "maintenanceCost": 2 }
+}

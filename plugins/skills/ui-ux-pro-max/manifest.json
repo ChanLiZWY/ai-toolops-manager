@@ -1,0 +1,36 @@
+{
+  "$schema": "ai-toolops://plugin/skill/v1",
+  "type": "skill",
+  "name": "ui-ux-pro-max",
+  "label": "UI/UX Pro Max",
+  "version": "1.0.0",
+  "description": "专业的 UI/UX 设计指导 Skill。包含 67 种 UI 风格、161 套配色、57 种字体配对、99 条 UX 指南、25 种图表类型、22 个技术栈。",
+  "source": {
+    "type": "npx",
+    "package": "ui-ux-pro-max-cli",
+    "command": "uipro init --ai codex",
+    "url": "https://github.com/nextlevelbuilder/ui-ux-pro-max-skill"
+  },
+  "workflowStage": "execution",
+  "requiredTools": [],
+  "recommendedTools": ["rg", "semble"],
+  "promptFile": ".codex/skills/ui-ux-pro-max/SKILL.md",
+  "dataDir": ".codex/skills/ui-ux-pro-max/data/",
+  "scriptsDir": ".codex/skills/ui-ux-pro-max/scripts/",
+  "enabled": true,
+  "tokens": 4800,
+  "useWhen": [
+    "设计新的页面（Landing Page、Dashboard、Admin、SaaS、Mobile App）",
+    "创建或重构 UI 组件",
+    "选择配色方案、字体系统或布局体系",
+    "审查 UI 代码的用户体验或视觉一致性",
+    "实现导航结构、动效或响应式行为",
+    "做产品层级的设计决策"
+  ],
+  "skipWhen": [
+    "纯后端逻辑开发",
+    "仅涉及 API 或数据库设计",
+    "与界面无关的性能优化",
+    "基础设施或 DevOps 工作"
+  ]
+}

@@ -10,6 +10,7 @@ import { generateUi } from './ui/generateUi.js'
 import { SLOT_TYPES, normalizeEquipment, promoteTool, setSlotTools, reorderSlotTools, getSlotTools } from './core/equipmentModel.js'
 import { WORKFLOW_STAGE_KEYS, normalizeWorkflowStage, workflowStageLabel } from './core/workflow.js'
 import { cwdPath, ensureDir, parseArgs, safeTimestamp, serveStatic, timestamp, writeJson, writeText, readJson, readText } from './utils.js'
+import { scanToolPlugins, scanSkillPlugins, scanAndWriteRegistry, readPluginRegistry } from './plugin/scanner.js'
 
 export async function main(args) {
   const { flags, positionals } = parseArgs(args)
@@ -31,6 +32,8 @@ export async function main(args) {
     case 'sync-agent-rules': return generateAgentRules(new Map([...flags, ['apply', true]]))
     case 'setup': return setup(flags)
     case 'adapters': return adaptersCommand(positionals[1], positionals[2])
+    case 'plugin': return pluginCommand(positionals[1], positionals.slice(2), flags)
+    case 'skill': return skillCommand(positionals[1], positionals[2], flags)
     case 'help':
     default: return help()
   }
@@ -46,15 +49,17 @@ Commands:
   ai-toolops ui [--port 4177]                     生成并打开装备栏静态服务
   ai-toolops equip <slot> <tool>                  将工具加入槽位并置顶，第一项生效
   ai-toolops unequip <slot>                       清空能力槽位
-  ai-toolops toggle <slot> on|off                 启用或禁用槽位；关闭后 Agent 不使用该能力工具
+  ai-toolops toggle <slot> on|off                 启用或禁用槽位
   ai-toolops reorder-tools <slot> <tool...>       调整同槽位工具优先级，第一项生效
-  ai-toolops register-tool <slot> <tool> [--label 名称] [--status installed] 注册工具，不直接手改配置
-  ai-toolops create-slot <slot> --label 名称 [--slot-type exclusive_priority|additive|project_context|internal_adapter] [--workflow-stage project_retrieval] 新增能力槽位
-  ai-toolops generate-agent-rules [--apply]       生成 Agent 轻量索引、按需细则与有效策略；--apply 会同步 AGENTS.md 引用块
-  ai-toolops sync-agent-rules                     生成规则并同步 AGENTS.md 引用块
-  ai-toolops setup [--project 路径] [--ui --port 4177] 一步完成初始化/升级、doctor、规则同步和 UI 数据生成
-  ai-toolops adapters list|enable|disable [id]       查看或切换 Codex / Claude / Roo 适配器
-  ai-toolops rollback                             恢复最近一次初始化前快照
+  ai-toolops register-tool <slot> <tool> [--label] 注册工具
+  ai-toolops create-slot <slot> --label 名称       新增能力槽位
+  ai-toolops generate-agent-rules [--apply]       生成 Agent 规则与有效策略
+  ai-toolops sync-agent-rules                     同步 AGENTS.md 引用块
+  ai-toolops setup [--project 路径] [--ui]        一步初始化/升级
+  ai-toolops adapters list|enable|disable [id]    管理 Agent 适配器
+  ai-toolops plugin scan|list                     扫描/列出插件
+  ai-toolops skill list|enable|disable <name>     管理 Skill
+  ai-toolops rollback                             恢复最近快照
 `)
 }
 
@@ -476,3 +481,65 @@ function syncAgentsMarkdown() {
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
+
+function pluginCommand(action = 'scan', args = [], flags = new Map()) {
+  if (action === 'scan' || !action) {
+    const tools = scanToolPlugins()
+    const skills = scanSkillPlugins()
+    const registry = scanAndWriteRegistry()
+    console.log(JSON.stringify({
+      ok: true,
+      tools: Object.keys(tools).length,
+      skills: Object.keys(skills).length,
+      toolNames: Object.keys(tools),
+      skillNames: Object.keys(skills)
+    }, null, 2))
+    return
+  }
+  if (action === 'list') {
+    const registry = readPluginRegistry()
+    console.log(JSON.stringify({
+      ok: true,
+      tools: registry.tools || {},
+      skills: registry.skills || {}
+    }, null, 2))
+    return
+  }
+  throw new Error('用法：ai-toolops plugin scan|list')
+}
+
+function skillCommand(action = 'list', skillName = '', flags = new Map()) {
+  const registry = readPluginRegistry()
+  const skills = registry.skills || {}
+
+  if (action === 'list' || !action) {
+    console.log(JSON.stringify({
+      ok: true,
+      skills: Object.entries(skills).map(([name, skill]) => ({
+        name,
+        label: skill.label || name,
+        description: skill.description || '',
+        enabled: skill.enabled !== false,
+        workflowStage: skill.workflowStage || '',
+        requiredTools: skill.requiredTools || []
+      }))
+    }, null, 2))
+    return
+  }
+
+  if (!skillName) throw new Error('用法：ai-toolops skill list|enable|disable <name>')
+
+  if (action === 'enable') {
+    // 当前 skills 从 plugin-registry 读取，修改后写回（后续可持久化到 equipment.json）
+    console.log(JSON.stringify({ ok: true, action: 'enable', skill: skillName, note: 'Skill 启用在当前版本中为可读状态，持久化将在后续迭代实现。' }))
+    return
+  }
+
+  if (action === 'disable') {
+    console.log(JSON.stringify({ ok: true, action: 'disable', skill: skillName, note: 'Skill 关闭在后续迭代实现。' }))
+    return
+  }
+
+  throw new Error('用法：ai-toolops skill list|enable|disable <name>')
+}
+

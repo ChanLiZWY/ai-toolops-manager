@@ -2,6 +2,7 @@ import path from 'node:path'
 import { cwdPath, ensureDir, readJson, writeText } from '../utils.js'
 import { normalizeEquipment } from '../core/equipmentModel.js'
 import { WORKFLOW_STAGES } from '../core/workflow.js'
+import { readPluginRegistry } from '../plugin/scanner.js'
 
 export function generateUi() {
   const outDir = cwdPath('.ai-toolops', 'ui')
@@ -12,7 +13,12 @@ export function generateUi() {
   const registry = readJson(cwdPath('.ai-toolops', 'tool-registry.json'), { tools: {} })
   const capabilities = readJson(cwdPath('.ai-toolops', 'capabilities.json'), { capabilities: {} })
   const adapters = readJson(cwdPath('.ai-toolops', 'adapters.json'), { adapters: {} })
-  writeText(path.join(outDir, 'data.json'), JSON.stringify({ equipment, profile, health, registry, capabilities, adapters, workflowStages: WORKFLOW_STAGES }, null, 2))
+  const pluginRegistry = readPluginRegistry()
+  writeText(path.join(outDir, 'data.json'), JSON.stringify({
+    equipment, profile, health, registry, capabilities, adapters,
+    plugins: pluginRegistry,
+    workflowStages: WORKFLOW_STAGES
+  }, null, 2))
   writeText(path.join(outDir, 'index.html'), html())
   writeText(path.join(outDir, 'styles.css'), css())
   writeText(path.join(outDir, 'app.js'), js())
@@ -25,34 +31,47 @@ function html() {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>AI ToolOps 装备栏</title>
+  <title>AI ToolOps</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body data-theme="night">
   <main class="shell">
-    <section class="hero">
+    <!-- Hero -->
+    <header class="hero">
       <div class="hero-copy">
         <p class="eyebrow">AI ToolOps Manager</p>
-        <h1 id="projectName">项目装备栏</h1>
+        <h1 id="projectName">装备栏</h1>
         <p id="projectMeta" class="muted"></p>
       </div>
       <div class="hero-side">
         <div class="theme-toggle" aria-label="主题模式">
-          <button id="dayModeBtn" type="button" data-theme-choice="day">白天</button>
-          <button id="nightModeBtn" type="button" data-theme-choice="night">夜晚</button>
+          <button type="button" data-theme-choice="day">☀</button>
+          <button type="button" data-theme-choice="night">☾</button>
         </div>
         <div class="health" id="healthBox"></div>
       </div>
-    </section>
+    </header>
 
-    <section class="panel doctor-panel">
+    <!-- Tabs -->
+    <nav class="tabs" id="mainTabs">
+      <button class="tab active" data-tab="equipment">装备</button>
+      <button class="tab" data-tab="skills">Skills</button>
+      <button class="tab" data-tab="plugins">插件</button>
+      <button class="tab" data-tab="doctor">诊断</button>
+    </nav>
+
+    <!-- Doctor -->
+    <section class="panel tab-panel" id="doctorPanel">
       <div class="section-head">
         <div>
           <p class="eyebrow">Doctor</p>
-          <h2>检查结果</h2>
-          <p class="muted compact">默认折叠，只展示状态重点；需要排查时再展开查看明细。</p>
+          <h2>健康检查</h2>
+          <p class="muted compact">默认折叠，排查时展开明细。</p>
         </div>
-        <button id="toggleDoctorBtn" class="ghost-button" type="button">展开明细</button>
+        <button id="toggleDoctorBtn" class="ghost-button" type="button">展开</button>
       </div>
       <div id="doctorSummary" class="doctor-summary"></div>
       <div id="doctorBody" class="doctor-body collapsed">
@@ -60,49 +79,64 @@ function html() {
       </div>
     </section>
 
-    <section class="panel equipment-panel wide-panel">
+    <!-- Equipment -->
+    <section class="panel tab-panel active" id="equipmentPanel">
       <div class="section-head equipment-head">
         <div>
           <p class="eyebrow">Workflow Equipment</p>
           <div class="title-row">
-            <h2>按 Agent 执行流程排列</h2>
-            <button id="globalAddToolBtn" class="circle-button" title="生成新增工具安装接入提示词">+</button>
+            <h2>装备配置</h2>
+            <button id="globalAddToolBtn" class="circle-button" title="生成新增工具提示词">+</button>
           </div>
         </div>
         <div class="equipment-controls">
-          <p class="muted">相似或互补能力放在同一流程阶段；卡片内工具垂直排序，互斥槽位排序第一项为当前生效工具。</p>
           <div class="columns-control" aria-label="每行卡片数量">
-            <span>每行</span><button data-cols="1">1</button><button data-cols="2">2</button><button data-cols="3">3</button><button data-cols="4">4</button>
+            <span>排布</span>
+            <button data-cols="1">1</button>
+            <button data-cols="2">2</button>
+            <button data-cols="3" class="active">3</button>
+            <button data-cols="4">4</button>
           </div>
         </div>
       </div>
       <div class="strategy-strip">
-        <strong>项目检索策略：</strong>目标文件明确直接查看；已知组件 / 依赖关系直接跨文件阅读；只有入口、调用链或影响面不明确时才先用 Semble，Semble 无结果再用 rg 兜底。
+        <strong>检索策略：</strong>目标明确直接读文件；入口/影响面不明时先用语义搜索，无结果再用精确搜索。
       </div>
       <div id="adapterStrip" class="adapter-strip"></div>
       <div id="equipmentGroups" class="equipment-groups"></div>
-      <div id="emptyEquipment" class="empty hidden">当前没有检测到可用装备或项目内置能力。请先安装工具，然后运行 <code>ai-toolops doctor</code>。</div>
+      <div id="emptyEquipment" class="empty hidden">暂无装备。请运行 <code>ai-toolops doctor</code>。</div>
     </section>
 
+    <!-- Skills -->
+    <section class="panel tab-panel" id="skillsPanel">
+      <div class="section-head">
+        <div><p class="eyebrow">Skills</p><h2>已安装 Skill</h2></div>
+      </div>
+      <div id="skillsList"></div>
+      <div id="emptySkills" class="empty">暂无 Skill。可通过 <code>plugins/skills/</code> 目录添加。</div>
+    </section>
+
+    <!-- Plugins -->
+    <section class="panel tab-panel" id="pluginsPanel">
+      <div class="section-head">
+        <div><p class="eyebrow">Plugins</p><h2>插件市场</h2></div>
+        <button id="scanPluginsBtn" class="ghost-button">重新扫描</button>
+      </div>
+      <div id="pluginToolsList"></div>
+    </section>
+
+    <!-- Prompt -->
     <section class="panel hidden" id="promptPanel">
       <div class="section-head">
         <div><p class="eyebrow">Prompt</p><h2>安装接入提示词</h2></div>
-        <button id="copyPromptBtn" class="ghost-button">复制提示词</button>
+        <button id="copyPromptBtn" class="ghost-button">复制</button>
       </div>
       <textarea id="promptText" readonly></textarea>
     </section>
 
-    <section class="panel usage-panel">
-      <h2>使用原则</h2>
-      <ul>
-        <li>先判断 Agent 当前流程阶段，再选择能力槽位和工具。</li>
-        <li>轻工具优先，重工具按需启用；未知入口或复杂影响面才使用重型检索。</li>
-        <li>外部同类工具槽位使用“排序第一项生效”的规则。</li>
-        <li>项目内置能力不是外部工具，不需要安装。</li>
-        <li>AskHuman 属于人工确认通道，只在关键问题或结束反馈时使用。</li>
-        <li>安装接入只能通过 <code>ai-toolops</code> 命令完成，不让 AI 直接修改配置文件。</li>
-      </ul>
-    </section>
+    <footer class="footer">
+      <p class="muted">AI ToolOps Manager · 本地优先 · 不默认上传</p>
+    </footer>
   </main>
   <script src="./app.js"></script>
 </body>
@@ -110,53 +144,714 @@ function html() {
 }
 
 function css() {
-  return `:root{color-scheme:dark;--font:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;--bg:#0e131b;--bg-soft:#121a25;--panel:#151d2a;--panel-2:#101722;--card:#151e2b;--rail:#111a26;--line:#2c3a4f;--line-soft:#243145;--text:#eef4ff;--text-strong:#ffffff;--muted:#a8b6c8;--muted-2:#7f8da2;--accent:#8ab4ff;--accent-strong:#5ea0ff;--ok:#4ade80;--ok-bg:rgba(74,222,128,.12);--warn:#facc15;--warn-bg:rgba(250,204,21,.12);--err:#fb7185;--err-bg:rgba(251,113,133,.12);--info:#60a5fa;--info-bg:rgba(96,165,250,.12);--shadow:0 18px 48px rgba(0,0,0,.26);--radius:22px;--equipment-columns:3}
-body[data-theme="day"]{color-scheme:light;--bg:#f3f0e8;--bg-soft:#f9f6ee;--panel:#fffdf7;--panel-2:#f6f1e7;--card:#fffdf8;--rail:#f8f2e7;--line:#d8d0c2;--line-soft:#e8dfd1;--text:#1f2937;--text-strong:#111827;--muted:#697586;--muted-2:#8a7667;--accent:#2563eb;--accent-strong:#1d4ed8;--ok:#15803d;--ok-bg:rgba(22,163,74,.1);--warn:#a16207;--warn-bg:rgba(202,138,4,.12);--err:#be123c;--err-bg:rgba(225,29,72,.1);--info:#2563eb;--info-bg:rgba(37,99,235,.1);--shadow:0 18px 46px rgba(96,72,36,.14)}
-*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top left,rgba(96,165,250,.12),transparent 28%),var(--bg);color:var(--text);font-family:var(--font);font-size:15px;line-height:1.55}.shell{max-width:min(2240px,calc(100vw - 48px));margin:0 auto;padding:28px 20px 52px}.hero,.panel{border:1px solid var(--line);border-radius:var(--radius);background:linear-gradient(135deg,var(--panel),var(--panel-2));box-shadow:var(--shadow)}.hero{display:flex;justify-content:space-between;gap:24px;align-items:center;padding:22px 24px}.hero-copy{min-width:0}.hero-side{display:flex;align-items:center;gap:14px;flex-wrap:wrap;justify-content:flex-end}.eyebrow{color:var(--accent);text-transform:uppercase;letter-spacing:.12em;font-size:11px;margin:0 0 7px;font-weight:800}h1{margin:0;font-size:30px;line-height:1.18;color:var(--text-strong)}h2{margin:0;font-size:20px;line-height:1.25;color:var(--text-strong)}h3{color:var(--text-strong)}.muted{color:var(--muted)}.compact{margin:.45rem 0 0;font-size:13px}.theme-toggle{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:999px;background:var(--panel-2);padding:5px}.theme-toggle button{border:0;border-radius:999px;background:transparent;color:var(--muted);height:30px;padding:0 12px;cursor:pointer;font-weight:700}.theme-toggle button.active{background:var(--accent-strong);color:#fff}.health{min-width:250px;padding:14px;border-radius:18px;background:var(--panel-2);border:1px solid var(--line)}.health-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:8px}.health-chip{border-radius:14px;padding:8px;text-align:center;border:1px solid var(--line-soft);background:rgba(127,127,127,.05)}.health-chip strong{display:block;font-size:18px;color:var(--text-strong)}.health-chip span{font-size:12px;color:var(--muted)}.status-mini{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;color:var(--muted);font-size:12px}.status-mini span{border:1px solid var(--line-soft);border-radius:999px;padding:4px 8px;background:var(--panel)}.panel{margin-top:22px;padding:20px 22px}.section-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:14px}.title-row{display:inline-flex;align-items:center;gap:12px}.circle-button{width:34px;height:34px;border-radius:999px;border:1px solid var(--accent-strong);background:var(--info-bg);color:var(--accent);font-size:22px;line-height:1;cursor:pointer;display:inline-flex;align-items:center;justify-content:center}.circle-button:hover,.add-button:hover,.ghost-button:hover{filter:brightness(1.08);transform:translateY(-1px)}.ghost-button{border:1px solid var(--line);border-radius:999px;background:var(--panel-2);color:var(--text);height:34px;padding:0 14px;cursor:pointer;font-weight:700}.doctor-summary{display:flex;gap:10px;flex-wrap:wrap}.summary-pill{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);background:var(--panel-2);border-radius:999px;padding:8px 12px;font-size:13px}.summary-pill strong{font-size:15px;color:var(--text-strong)}.doctor-body{overflow:hidden;transition:max-height .22s ease,opacity .2s ease;margin-top:14px}.doctor-body.collapsed{display:none}.checks-table{display:grid;gap:8px}.check-row{display:grid;grid-template-columns:86px 1fr;gap:10px;align-items:start;border:1px solid var(--line-soft);border-radius:14px;padding:10px 12px;background:var(--panel-2)}.check-row .level{text-transform:uppercase;font-size:11px;font-weight:800;letter-spacing:.08em}.check-row p{margin:0}.check-row.error{border-color:rgba(251,113,133,.35);background:var(--err-bg)}.check-row.warning{border-color:rgba(250,204,21,.35);background:var(--warn-bg)}.check-row.info{border-color:rgba(96,165,250,.28);background:var(--info-bg)}.equipment-head{align-items:flex-start}.equipment-controls{display:flex;flex-direction:column;gap:10px;align-items:flex-end;max-width:980px}.equipment-controls .muted{font-size:13px;max-width:860px;text-align:right}.columns-control{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);border-radius:999px;padding:5px 7px;background:var(--panel-2)}.columns-control span{color:var(--muted);font-size:13px;padding:0 4px}.columns-control button{width:30px;height:28px;border-radius:999px;border:1px solid var(--line);background:var(--card);color:var(--muted);cursor:pointer;font-weight:700}.columns-control button.active{background:var(--accent-strong);border-color:var(--accent);color:#fff}.strategy-strip{border:1px solid rgba(96,165,250,.32);background:var(--info-bg);border-radius:16px;padding:11px 14px;margin-bottom:18px;color:var(--text);font-size:13px;line-height:1.65}.equipment-groups{display:grid;gap:24px}.workflow-group{display:grid;grid-template-columns:minmax(220px,280px) 1fr;gap:16px;border-top:1px solid var(--line);padding-top:18px}.workflow-rail{position:relative;border:1px solid var(--line);border-radius:18px;background:var(--rail);padding:15px;min-height:142px}.workflow-index{width:30px;height:30px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;background:var(--accent-strong);border:1px solid var(--accent);color:#fff;font-weight:800}.workflow-rail h3{margin:12px 0 7px;font-size:17px}.workflow-rail p{margin:0;color:var(--muted);font-size:13px;line-height:1.55}.workflow-grid{display:grid;grid-template-columns:repeat(var(--equipment-columns),minmax(0,1fr));gap:15px}.card{border:1px solid var(--line);border-radius:20px;background:var(--card);padding:16px;min-height:286px;display:flex;flex-direction:column;gap:11px}.card.disabled{opacity:.72}.card.external_tool{border-color:color-mix(in srgb,var(--line) 75%,#94a3b8)}.card.project_builtin{border-color:color-mix(in srgb,var(--line) 70%,#60a5fa)}.card.agent_adapter{border-color:color-mix(in srgb,var(--line) 70%,#a855f7)}.card.interaction_tool{border-color:color-mix(in srgb,var(--line) 70%,#fb923c)}.card.unavailable{border-color:rgba(250,204,21,.44);background:linear-gradient(135deg,var(--warn-bg),var(--card))}.card-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.card h4{margin:0 0 4px;font-size:18px;color:var(--text-strong)}.slot-key{color:var(--muted-2);font-size:12px}.meta-line{color:var(--muted);font-size:13px;line-height:1.45}.condition-line{color:var(--text);font-size:13px;line-height:1.5;background:var(--panel-2);border:1px solid var(--line-soft);border-radius:12px;padding:9px 10px}.condition-line strong{color:var(--accent)}.tool-summary{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.tool-summary strong{font-size:13px;color:var(--text-strong)}.badges{display:flex;gap:7px;flex-wrap:wrap}.badge{font-size:12px;color:var(--text);background:var(--panel-2);border:1px solid var(--line-soft);padding:4px 8px;border-radius:999px}.badge.ok{color:var(--ok);background:var(--ok-bg);border-color:rgba(74,222,128,.35)}.badge.warning{color:var(--warn);background:var(--warn-bg);border-color:rgba(250,204,21,.35)}.badge.error{color:var(--err);background:var(--err-bg);border-color:rgba(251,113,133,.35)}.badge.info{color:var(--info);background:var(--info-bg);border-color:rgba(96,165,250,.35)}.badge.disabled{color:var(--muted);background:rgba(148,163,184,.12);border-color:rgba(148,163,184,.28)}.switch{position:relative;display:inline-flex;width:46px;height:26px;align-items:center}.switch input{opacity:0;width:0;height:0}.slider{position:absolute;cursor:pointer;inset:0;background:#64748b;border:1px solid rgba(148,163,184,.65);border-radius:999px;transition:.18s ease}.slider:before{content:"";position:absolute;height:18px;width:18px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.18s ease;box-shadow:0 2px 6px rgba(0,0,0,.2)}.switch input:checked+.slider{background:var(--accent-strong);border-color:var(--accent)}.switch input:checked+.slider:before{transform:translateX(20px)}.tool-list{display:grid;gap:8px;padding:0;margin:4px 0 0;list-style:none}.tool-item{display:grid;grid-template-columns:22px 24px 1fr auto;gap:8px;align-items:center;border:1px solid var(--line);border-radius:14px;background:var(--panel-2);padding:9px;cursor:grab}.tool-item:active{cursor:grabbing}.tool-item.primary{border-color:rgba(74,222,128,.5);box-shadow:0 0 0 1px rgba(74,222,128,.14)}.tool-item.dragging{opacity:.55}.drag-handle{color:var(--muted-2);font-size:16px}.order{width:22px;height:22px;border-radius:999px;background:var(--line-soft);display:inline-flex;align-items:center;justify-content:center;color:var(--muted);font-size:12px;font-weight:800}.tool-name{font-weight:700;color:var(--text-strong);overflow:hidden;text-overflow:ellipsis}.tool-status{display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end}.add-tool{display:flex;gap:8px;margin-top:auto}.add-tool input{min-width:0;flex:1;border:1px solid var(--line);border-radius:12px;background:var(--panel-2);color:var(--text);padding:9px 10px}.add-button{width:38px;border-radius:12px;border:1px solid var(--accent);background:var(--info-bg);color:var(--accent);font-size:20px;cursor:pointer}.empty{border:1px dashed var(--line);border-radius:16px;color:var(--muted);padding:18px;background:var(--panel-2)}.hidden{display:none!important}textarea{width:100%;min-height:300px;background:var(--panel-2);border:1px solid var(--line);border-radius:16px;color:var(--text);padding:14px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;font-size:13px;line-height:1.6}.usage-panel ul{margin-bottom:0}.usage-panel li{margin:7px 0}@media (max-width:1100px){.workflow-group{grid-template-columns:1fr}.workflow-grid{grid-template-columns:repeat(min(var(--equipment-columns),2),minmax(0,1fr))}.hero{align-items:flex-start}.section-head{flex-direction:column}.equipment-controls{align-items:flex-start}.equipment-controls .muted{text-align:left}.hero-side{justify-content:flex-start}}@media (max-width:760px){.shell{max-width:100%;padding:18px 12px 36px}.hero{flex-direction:column}.health{width:100%}.workflow-grid{grid-template-columns:1fr}.tool-item{grid-template-columns:22px 24px 1fr}.tool-status{grid-column:3/-1;justify-content:flex-start}.panel{padding:16px}h1{font-size:25px}}`
+  return `/* AI ToolOps UI v2 — 基于 ui-ux-pro-max 设计系统 */
+:root {
+  color-scheme: dark;
+  --font-heading: 'Fira Code', 'SF Mono', 'Cascadia Code', monospace;
+  --font-body: 'Fira Sans', system-ui, -apple-system, 'Microsoft YaHei', sans-serif;
+  --color-primary: #1E293B;
+  --color-on-primary: #FFFFFF;
+  --color-secondary: #334155;
+  --color-accent: #22C55E;
+  --color-background: #0F172A;
+  --color-foreground: #F8FAFC;
+  --color-muted-bg: #272F42;
+  --color-border: #475569;
+  --color-destructive: #EF4444;
+  --color-ring: #22C55E;
+  --ok: #22C55E;
+  --ok-bg: rgba(34, 197, 94, 0.12);
+  --warn: #EAB308;
+  --warn-bg: rgba(234, 179, 8, 0.12);
+  --err: #EF4444;
+  --err-bg: rgba(239, 68, 68, 0.12);
+  --info: #3B82F6;
+  --info-bg: rgba(59, 130, 246, 0.12);
+  --radius: 16px;
+  --equipment-columns: 3;
+  --shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  --glow: 0 0 20px rgba(34, 197, 94, 0.08);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  margin: 0;
+  background: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-body);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.shell {
+  max-width: min(2240px, calc(100vw - 32px));
+  margin: 0 auto;
+  padding: 20px 16px 48px;
+}
+
+/* Hero */
+.hero {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 20px;
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-secondary) 100%);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.hero-copy { min-width: 0; }
+.hero-side { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.eyebrow { color: var(--color-accent); text-transform: uppercase; letter-spacing: 0.12em; font-size: 10px; font-weight: 700; margin-bottom: 4px; font-family: var(--font-heading); }
+h1 { font-family: var(--font-heading); font-size: 24px; color: var(--color-foreground); margin: 0; }
+.muted { color: #94A3B8; font-size: 13px; }
+
+/* Tabs */
+.tabs {
+  display: flex;
+  gap: 4px;
+  margin: 16px 0 0;
+  background: var(--color-muted-bg);
+  border-radius: var(--radius);
+  padding: 4px;
+  border: 1px solid var(--color-border);
+}
+.tab {
+  flex: 1;
+  padding: 8px 16px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: #94A3B8;
+  font-family: var(--font-heading);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.tab:hover { color: var(--color-foreground); background: rgba(255,255,255,0.05); }
+.tab.active { background: var(--color-primary); color: var(--color-foreground); box-shadow: var(--glow); }
+
+/* Panels */
+.panel {
+  margin-top: 16px;
+  padding: 16px 20px;
+  background: rgba(30, 41, 59, 0.6);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  backdrop-filter: blur(8px);
+}
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+.section-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; margin-bottom: 12px; }
+.title-row { display: inline-flex; align-items: center; gap: 10px; }
+h2 { font-family: var(--font-heading); font-size: 16px; color: var(--color-foreground); margin: 0; }
+.compact { margin-top: 4px; font-size: 12px; }
+
+/* Buttons */
+.circle-button {
+  width: 30px; height: 30px;
+  border-radius: 999px;
+  border: 1px solid var(--color-accent);
+  background: var(--ok-bg);
+  color: var(--color-accent);
+  font-size: 18px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+.circle-button:hover { filter: brightness(1.1); transform: translateY(-1px); box-shadow: var(--glow); }
+.ghost-button {
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-muted-bg);
+  color: var(--color-foreground);
+  height: 30px;
+  padding: 0 12px;
+  cursor: pointer;
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 600;
+  transition: all 0.15s ease;
+}
+.ghost-button:hover { border-color: var(--color-accent); }
+
+/* Health */
+.health { min-width: 200px; padding: 10px; border-radius: 12px; background: rgba(0,0,0,0.2); border: 1px solid var(--color-border); }
+.health-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 6px; }
+.health-chip { border-radius: 10px; padding: 6px; text-align: center; background: rgba(255,255,255,0.03); }
+.health-chip strong { display: block; font-size: 16px; font-family: var(--font-heading); }
+.health-chip span { font-size: 11px; color: #94A3B8; }
+.status-mini { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.status-mini span { border: 1px solid var(--color-border); border-radius: 999px; padding: 2px 8px; font-size: 11px; background: rgba(0,0,0,0.1); }
+
+/* Doctor Summary */
+.doctor-summary { display: flex; gap: 8px; flex-wrap: wrap; }
+.summary-pill { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--color-border); background: var(--color-muted-bg); border-radius: 999px; padding: 6px 10px; font-size: 12px; }
+.summary-pill strong { font-size: 14px; font-family: var(--font-heading); }
+.doctor-body { overflow: hidden; transition: max-height 0.22s ease, opacity 0.2s ease; margin-top: 12px; }
+.doctor-body.collapsed { display: none; }
+.checks-table { display: grid; gap: 6px; }
+.check-row { display: grid; grid-template-columns: 70px 1fr; gap: 8px; align-items: start; border: 1px solid var(--color-border); border-radius: 12px; padding: 8px 10px; background: rgba(0,0,0,0.1); }
+.check-row .level { font-family: var(--font-heading); font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+.check-row p { margin: 0; font-size: 13px; }
+.check-row.error { border-color: rgba(239,68,68,0.35); background: var(--err-bg); }
+.check-row.warning { border-color: rgba(234,179,8,0.35); background: var(--warn-bg); }
+.check-row.info { border-color: rgba(59,130,246,0.28); background: var(--info-bg); }
+
+/* Equipment */
+.equipment-head { align-items: flex-start; }
+.equipment-controls { display: flex; align-items: center; gap: 8px; }
+.columns-control { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--color-border); border-radius: 999px; padding: 4px; background: var(--color-muted-bg); }
+.columns-control span { color: #94A3B8; font-size: 12px; padding: 0 4px; }
+.columns-control button { width: 26px; height: 24px; border-radius: 999px; border: 1px solid transparent; background: transparent; color: #94A3B8; cursor: pointer; font-weight: 600; font-size: 12px; }
+.columns-control button.active { background: var(--color-accent); border-color: var(--color-accent); color: #fff; }
+
+.strategy-strip {
+  border: 1px solid rgba(59,130,246,0.32);
+  background: var(--info-bg);
+  border-radius: 12px;
+  padding: 10px 12px;
+  margin-bottom: 14px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.adapter-strip { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.adapter-pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border: 1px solid var(--color-border); border-radius: 999px; background: var(--color-muted-bg); font-size: 12px; }
+.adapter-pill strong { font-family: var(--font-heading); }
+
+.equipment-groups { display: grid; gap: 20px; }
+
+/* Workflow Group */
+.workflow-group {
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) 1fr;
+  gap: 14px;
+  border-top: 1px solid var(--color-border);
+  padding-top: 16px;
+}
+.workflow-rail {
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  background: var(--color-muted-bg);
+  padding: 12px;
+  min-height: 120px;
+}
+.workflow-index {
+  width: 28px; height: 28px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-accent);
+  color: #fff;
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: 13px;
+}
+.workflow-rail h3 { margin: 10px 0 4px; font-family: var(--font-heading); font-size: 15px; color: var(--color-foreground); }
+.workflow-rail p { margin: 0; color: #94A3B8; font-size: 12px; line-height: 1.5; }
+.workflow-grid { display: grid; grid-template-columns: repeat(var(--equipment-columns), minmax(0, 1fr)); gap: 12px; }
+
+/* Card */
+.card {
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  background: rgba(15, 23, 42, 0.8);
+  padding: 14px;
+  min-height: 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: all 0.15s ease;
+}
+.card:hover { border-color: var(--color-accent); box-shadow: var(--glow); }
+.card.disabled { opacity: 0.6; }
+.card.external_tool { border-left: 3px solid #94A3B8; }
+.card.project_builtin { border-left: 3px solid var(--info); }
+.card.agent_adapter { border-left: 3px solid #A855F7; }
+.card.interaction_tool { border-left: 3px solid #FB923C; }
+.card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.card h4 { font-family: var(--font-heading); font-size: 15px; color: var(--color-foreground); margin: 0 0 2px; }
+.slot-key { color: #64748B; font-size: 11px; font-family: var(--font-heading); }
+.meta-line { color: #94A3B8; font-size: 12px; line-height: 1.4; }
+.condition-line { color: var(--color-foreground); font-size: 12px; line-height: 1.5; background: rgba(0,0,0,0.2); border: 1px solid var(--color-border); border-radius: 10px; padding: 8px; }
+.condition-line strong { color: var(--color-accent); }
+.tool-summary { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.tool-summary strong { font-size: 12px; font-family: var(--font-heading); color: var(--color-foreground); }
+.badges { display: flex; gap: 4px; flex-wrap: wrap; }
+
+.badge {
+  font-size: 11px;
+  color: var(--color-foreground);
+  background: var(--color-muted-bg);
+  border: 1px solid var(--color-border);
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.badge.ok { color: var(--ok); background: var(--ok-bg); border-color: rgba(34,197,94,0.35); }
+.badge.warning { color: var(--warn); background: var(--warn-bg); border-color: rgba(234,179,8,0.35); }
+.badge.error { color: var(--err); background: var(--err-bg); border-color: rgba(239,68,68,0.35); }
+.badge.info { color: var(--info); background: var(--info-bg); border-color: rgba(59,130,246,0.35); }
+.badge.disabled { color: #64748B; background: rgba(100,116,139,0.12); border-color: rgba(100,116,139,0.28); }
+
+/* Switch */
+.switch { position: relative; display: inline-flex; width: 40px; height: 22px; align-items: center; flex-shrink: 0; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.slider { position: absolute; cursor: pointer; inset: 0; background: #64748B; border: 1px solid rgba(148,163,184,0.5); border-radius: 999px; transition: 0.15s ease; }
+.slider:before { content: ""; position: absolute; height: 16px; width: 16px; left: 2px; top: 2px; background: #fff; border-radius: 50%; transition: 0.15s ease; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
+.switch input:checked + .slider { background: var(--color-accent); border-color: var(--color-accent); }
+.switch input:checked + .slider:before { transform: translateX(18px); }
+
+/* Tool List */
+.tool-list { display: grid; gap: 6px; padding: 0; margin: 4px 0 0; list-style: none; }
+.tool-item {
+  display: grid;
+  grid-template-columns: 18px 20px 1fr auto;
+  gap: 6px;
+  align-items: center;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: rgba(0,0,0,0.2);
+  padding: 7px 8px;
+  cursor: grab;
+  transition: all 0.1s ease;
+}
+.tool-item:hover { border-color: var(--color-accent); }
+.tool-item:active { cursor: grabbing; }
+.tool-item.primary { border-color: rgba(34,197,94,0.5); box-shadow: 0 0 0 1px rgba(34,197,94,0.14); }
+.tool-item.dragging { opacity: 0.5; }
+.drag-handle { color: #64748B; font-size: 14px; user-select: none; cursor: grab; }
+.order { width: 20px; height: 20px; border-radius: 999px; background: var(--color-muted-bg); display: inline-flex; align-items: center; justify-content: center; color: #94A3B8; font-size: 10px; font-weight: 700; }
+.tool-name { font-weight: 600; color: var(--color-foreground); overflow: hidden; text-overflow: ellipsis; font-size: 13px; }
+.tool-status { display: inline-flex; gap: 4px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.add-tool { display: flex; gap: 6px; margin-top: auto; }
+.add-tool input { min-width: 0; flex: 1; border: 1px solid var(--color-border); border-radius: 10px; background: rgba(0,0,0,0.2); color: var(--color-foreground); padding: 7px 8px; font-size: 13px; }
+.add-tool input:focus { outline: none; border-color: var(--color-accent); }
+.add-button { width: 34px; border-radius: 10px; border: 1px solid var(--color-accent); background: var(--ok-bg); color: var(--color-accent); font-size: 18px; cursor: pointer; transition: all 0.15s ease; }
+.add-button:hover { filter: brightness(1.1); }
+
+/* Skills */
+#skillsList { display: grid; gap: 12px; }
+.skill-card {
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  background: rgba(15, 23, 42, 0.8);
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.skill-card-left { flex: 1; }
+.skill-card-left h4 { font-family: var(--font-heading); font-size: 14px; margin: 0 0 4px; }
+.skill-card-left p { color: #94A3B8; font-size: 12px; margin: 0; line-height: 1.5; }
+
+/* Plugins */
+#pluginToolsList { display: grid; gap: 8px; }
+.plugin-item {
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  padding: 10px 14px;
+  background: rgba(0,0,0,0.1);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.plugin-item .plugin-info { flex: 1; }
+.plugin-item .plugin-name { font-family: var(--font-heading); font-weight: 600; font-size: 13px; }
+.plugin-item .plugin-desc { color: #94A3B8; font-size: 12px; }
+
+/* Common */
+.empty { border: 1px dashed var(--color-border); border-radius: 12px; color: #94A3B8; padding: 16px; background: rgba(0,0,0,0.1); text-align: center; }
+.hidden { display: none !important; }
+textarea { width: 100%; min-height: 200px; background: rgba(0,0,0,0.2); border: 1px solid var(--color-border); border-radius: 12px; color: var(--color-foreground); padding: 12px; font-family: var(--font-heading); font-size: 13px; line-height: 1.6; }
+
+/* Footer */
+.footer { text-align: center; padding: 24px 0 8px; }
+.footer p { font-size: 12px; }
+
+/* Responsive */
+@media (max-width: 1100px) {
+  .workflow-group { grid-template-columns: 1fr; }
+  .workflow-grid { grid-template-columns: repeat(min(var(--equipment-columns), 2), minmax(0, 1fr)); }
+  .hero { flex-direction: column; align-items: flex-start; }
+  .section-head { flex-direction: column; }
+}
+@media (max-width: 760px) {
+  .shell { max-width: 100%; padding: 12px 8px 24px; }
+  .workflow-grid { grid-template-columns: 1fr; }
+  .tool-item { grid-template-columns: 18px 20px 1fr; }
+  .tool-status { grid-column: 3 / -1; justify-content: flex-start; }
+  .panel { padding: 12px; }
+  h1 { font-size: 20px; }
+}
+`
 }
 
 function js() {
-  return `const escapeHtml = (value) => String(value ?? '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#039;')
-const statusText = { installed:'已安装', project_provided:'项目内置', built_in:'内置适配', configured_not_installed:'已配置未安装', recommended_not_installed:'推荐未安装', configured_unverified:'已配置待验证', empty:'未装备', ok:'正常', optional:'可选', recommended:'推荐', missing:'缺失', disabled:'已关闭', unknown:'未知工具' }
-const statusLevel = (status) => status === 'installed' || status === 'project_provided' || status === 'built_in' || status === 'ok' ? 'ok' : ['configured_not_installed','recommended_not_installed','missing','unknown'].includes(status) ? 'warning' : status === 'error' ? 'error' : 'info'
-const slotTypeText = { exclusive_priority:'互斥排序', additive:'同时启用', project_context:'项目内置', internal_adapter:'内置适配' }
-const categoryText = { external_tool:'外部工具', project_builtin:'项目内置能力', agent_adapter:'Agent 适配', interaction_tool:'人工确认' }
-const unavailableStatuses = new Set(['recommended_not_installed','configured_not_installed','missing','unknown'])
+  return `//
+// AI ToolOps UI v2 — SPA
+//
+const escapeHtml = (v) => String(v ?? '').replaceAll('&','&').replaceAll('<','<').replaceAll('>','>').replaceAll('"','"');
+const statusText = { installed:'已安装', project_provided:'项目内置', built_in:'内置适配', configured_not_installed:'未安装', recommended_not_installed:'推荐未安装', configured_unverified:'待验证', empty:'空', ok:'正常', optional:'可选', recommended:'推荐', missing:'缺失', disabled:'已关闭', unknown:'未知' };
+const statusLevel = (s) => s==='installed'||s==='project_provided'||s==='built_in'||s==='ok'?'ok':['configured_not_installed','recommended_not_installed','missing','unknown'].includes(s)?'warning':s==='error'?'error':'info';
+const unavailable = new Set(['recommended_not_installed','configured_not_installed','missing','unknown']);
+const slotTypeText = { exclusive_priority:'互斥', additive:'叠加', project_context:'内置', internal_adapter:'内置适配' };
+const categoryText = { external_tool:'外部工具', project_builtin:'项目内置', agent_adapter:'Agent 适配', interaction_tool:'人工确认' };
 const fallbackStages = [
-  { key:'agent_rules', label:'规则入口 / Agent 适配', description:'先同步并读取 ToolOps 规则，让不同 Agent 遵守同一套能力配置。' },
-  { key:'prompt_intake', label:'需求理解 / 提示词优化', description:'整理用户需求、约束和验收标准；必要时生成更清晰的任务提示。' },
-  { key:'project_context', label:'项目上下文', description:'读取 README、AGENTS、架构文档、配置和项目画像，建立最小必要上下文。' },
-  { key:'project_retrieval', label:'项目检索', description:'目标明确先直读文件；入口或影响面不明时再使用 Semble / rg / 代码图谱。' },
-  { key:'thinking_strategy', label:'思考策略', description:'选择轻量或重型分析策略，控制 token 成本和工具调用范围。' },
-  { key:'planning', label:'列计划', description:'把需求拆成阶段、文件范围、接口范围、风险点和验收项。' },
-  { key:'execution', label:'执行修改', description:'按计划修改代码、配置、文档或工具接入，不越权改动。' },
-  { key:'validation', label:'验证', description:'运行 lint、test、build 或项目脚本，确认改动结果。' },
-  { key:'feedback', label:'反馈 / 人工确认', description:'需要用户确认、风险选择或结束反馈时，通过人工确认通道处理。' }
-]
-const slotStageFallback = { agent_compatibility:'agent_rules', architecture_context:'project_context', exact_search:'project_retrieval', semantic_search:'project_retrieval', code_graph:'project_retrieval', build_validation:'validation', human_confirmation:'feedback' }
-function getSlotTools(slot){ const result=[]; [...(Array.isArray(slot.tools)?slot.tools:[]), slot.active].forEach((item)=>{ const tool=String(item||'').trim(); if(tool&&!result.includes(tool)) result.push(tool) }); return result }
-function getSlotType(slot){ return slot.slotType || 'exclusive_priority' }
-function isPrioritySlot(slot){ return getSlotType(slot) === 'exclusive_priority' }
-function workflowStageFor(slotKey, slot){ return slot.workflowStage || slotStageFallback[slotKey] || 'execution' }
-function renderAdapters(adapters){ const root=document.getElementById('adapterStrip'); if(!root) return; const items=Object.values(adapters.adapters||{}); if(!items.length){ root.innerHTML=''; return } root.innerHTML=items.map((adapter)=>'<span class="adapter-pill"><strong>'+escapeHtml(adapter.label||adapter.id)+'</strong><span class="badge '+(adapter.enabled===false?'disabled':'ok')+'">'+escapeHtml(adapter.enabled===false?'关闭':'启用')+'</span><span>'+escapeHtml(adapter.generatedFile||'')+'</span></span>').join('') }
-function toolStatusMap(health){ const map=new Map(); (health.slots||[]).forEach((slot)=>{ (slot.tools||[]).forEach((tool)=>{ if(slot.slot&&tool.tool&&tool.status) map.set(slot.slot+'::'+tool.tool, tool.status) }) }); (health.checks||[]).forEach((item)=>{ if(item.slot&&item.tool&&item.status&&!map.has(item.slot+'::'+item.tool)) map.set(item.slot+'::'+item.tool,item.status) }); return map }
-function visibleToolsForSlot(slotKey, slot, statusMap){ return getSlotTools(slot).filter((tool)=>{ const status=statusMap.get(slotKey+'::'+tool)||'configured_unverified'; if(slot.category==='external_tool' && status==='recommended_not_installed' && slot.enabled!==false) return true; return true }) }
-function statusesForSlot(slotKey, tools, statusMap){ return tools.map((tool)=>statusMap.get(slotKey+'::'+tool)||'configured_unverified') }
-function setupThemeToggle(){ const stored=localStorage.getItem('ai-toolops.theme'); const theme=stored || (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'day' : 'night'); const apply=(value)=>{ const next=value==='day'?'day':'night'; document.body.dataset.theme=next; localStorage.setItem('ai-toolops.theme',next); document.querySelectorAll('[data-theme-choice]').forEach((button)=>button.classList.toggle('active',button.dataset.themeChoice===next)) }; document.querySelectorAll('[data-theme-choice]').forEach((button)=>button.addEventListener('click',()=>apply(button.dataset.themeChoice))); apply(theme) }
-function renderHealth(summary){ const counts=summary.statusCounts||{}; document.getElementById('healthBox').innerHTML='<div class="eyebrow">Health</div><div class="health-grid"><div class="health-chip"><strong>'+escapeHtml(summary.errors||0)+'</strong><span>Errors</span></div><div class="health-chip"><strong>'+escapeHtml(summary.warnings||0)+'</strong><span>Warnings</span></div><div class="health-chip"><strong>'+escapeHtml(summary.info||0)+'</strong><span>Info</span></div></div><div class="status-mini"><span>已安装 '+escapeHtml(counts.installed||0)+'</span><span>项目内置 '+escapeHtml(counts.project_provided||0)+'</span><span>推荐未安装 '+escapeHtml(counts.recommended_not_installed||0)+'</span></div>' }
-function renderDoctorSummary(health){ const summary=health.summary||{}; const checks=health.checks||[]; const byLevel=checks.reduce((acc,item)=>{ const key=item.level||'info'; acc[key]=(acc[key]||0)+1; return acc },{}); document.getElementById('doctorSummary').innerHTML='<span class="summary-pill"><strong>'+escapeHtml(summary.errors||byLevel.error||0)+'</strong>错误</span><span class="summary-pill"><strong>'+escapeHtml(summary.warnings||byLevel.warning||0)+'</strong>警告</span><span class="summary-pill"><strong>'+escapeHtml(summary.info||byLevel.info||0)+'</strong>提示</span><span class="summary-pill"><strong>'+escapeHtml(checks.length)+'</strong>检查项</span>' }
-function renderChecks(health){ const root=document.getElementById('checksList'); const checks=(health.checks||[]).slice(0,80); root.textContent=''; if(!checks.length){ root.innerHTML='<div class="empty">暂无检查结果，请运行 ai-toolops doctor。</div>'; return } checks.forEach((item)=>{ const row=document.createElement('div'); row.className='check-row '+escapeHtml(item.level||'info'); row.innerHTML='<div class="level">'+escapeHtml(item.level||'info')+'</div><p>'+escapeHtml(item.message||item.id||'')+'</p>'; root.appendChild(row) }) }
-function setupDoctorToggle(){ const body=document.getElementById('doctorBody'); const btn=document.getElementById('toggleDoctorBtn'); const apply=(open)=>{ body.classList.toggle('collapsed',!open); btn.textContent=open?'收起明细':'展开明细'; localStorage.setItem('ai-toolops.doctor.open',open?'1':'0') }; btn.addEventListener('click',()=>apply(body.classList.contains('collapsed'))); apply(localStorage.getItem('ai-toolops.doctor.open')==='1') }
-async function persistOrder(slotKey,orderedTools){ const res=await fetch('/api/reorder-tools',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({slot:slotKey,tools:orderedTools})}); if(!res.ok) throw new Error(await res.text()) }
-function updatePrimaryBadges(list,enabled,priority){ const items=Array.from(list.querySelectorAll('.tool-item')); items.forEach((item,index)=>{ const status=item.dataset.status; const primary=priority && index===0 && enabled && !unavailableStatuses.has(status); item.classList.toggle('primary',primary); item.querySelector('.order').textContent=String(index+1); const badge=item.querySelector('.primary-badge'); badge.textContent=!enabled?'已关闭':priority?(index===0?'生效':'备用'):'启用'; badge.className='badge primary-badge '+(!enabled?'disabled':primary?'ok':'info') }) }
-function cardClass(slot, enabled, allUnavailable){ return 'card '+escapeHtml(slot.category||'external_tool')+(enabled?'':' disabled')+(allUnavailable?' unavailable':'') }
-function conditionText(slotKey, slot, registry){ if(slotKey==='semantic_search') return '入口、调用链或影响面不明确时优先；Semble 无结果再用 rg 兜底。'; if(slotKey==='exact_search') return '目标明确、关键词明确、需路径校验或 Semble 无结果时使用。'; if(slotKey==='human_confirmation') return '只在关键范围、数据源、接口契约、验收标准、高风险操作或结束反馈时使用。'; const tool=getSlotTools(slot)[0]; const useWhen=registry.tools?.[tool]?.useWhen||[]; return useWhen.length ? useWhen.slice(0,2).join(' / ') : '' }
-function renderEquipment({equipment,health,registry,capabilities,workflowStages}){ const root=document.getElementById('equipmentGroups'); const empty=document.getElementById('emptyEquipment'); const statuses=toolStatusMap(health); const stages=(workflowStages&&workflowStages.length?workflowStages:fallbackStages); const stageMap=new Map(stages.map((stage)=>[stage.key,{...stage,items:[]}])); root.textContent=''; let visibleCount=0; Object.entries(equipment.slots||{}).forEach(([key,slot])=>{ const tools=visibleToolsForSlot(key,slot,statuses); if(!tools.length) return; const slotStatuses=statusesForSlot(key,tools,statuses); const stageKey=workflowStageFor(key,slot); if(!stageMap.has(stageKey)) stageMap.set(stageKey,{key:stageKey,label:stageKey,description:'自定义流程阶段。',items:[]}); stageMap.get(stageKey).items.push([key,slot,tools,slotStatuses]); visibleCount+=1 }); Array.from(stageMap.values()).forEach((stage,stageIndex)=>{ if(!stage.items.length) return; const section=document.createElement('section'); section.className='workflow-group'; section.innerHTML='<aside class="workflow-rail"><span class="workflow-index">'+String(stageIndex+1)+'</span><h3>'+escapeHtml(stage.label)+'</h3><p>'+escapeHtml(stage.description||'')+'</p></aside><div class="workflow-grid"></div>'; const grid=section.querySelector('.workflow-grid'); stage.items.sort((a,b)=>String(a[1].relationGroup||'').localeCompare(String(b[1].relationGroup||''))).forEach(([key,slot,tools,slotStatuses])=>{ const recommendedTool=slot.recommendedTool||capabilities.capabilities?.[key]?.defaultTool||tools[0]||''; const enabled=slot.enabled!==false; const priority=isPrioritySlot(slot); const allUnavailable=slotStatuses.length && slotStatuses.every((status)=>unavailableStatuses.has(status)); const summary=!enabled?'已关闭':allUnavailable?'未安装 / 不可用':(priority?tools[0]:'全部启用'); const condition=conditionText(key,slot,registry); const card=document.createElement('article'); card.className=cardClass(slot,enabled,allUnavailable); card.innerHTML='<div class="card-top"><div><h4>'+escapeHtml(slot.label)+'</h4><div class="slot-key">'+escapeHtml(key)+'</div></div><label class="switch" title="启用/禁用该能力槽位"><input type="checkbox" '+(enabled?'checked':'')+' data-slot="'+escapeHtml(key)+'"><span class="slider"></span></label></div><div class="tool-summary"><strong>'+(allUnavailable?'当前状态：':priority?'当前生效：':'当前启用：')+'</strong><span class="badge '+(!enabled?'disabled':allUnavailable?'warning':'ok')+'">'+escapeHtml(summary)+'</span></div><div class="meta-line">Fallback：'+escapeHtml((slot.fallback||[]).join(', ')||'无')+'</div>'+(condition?'<div class="condition-line"><strong>条件：</strong>'+escapeHtml(condition)+'</div>':'')+'<div class="badges"><span class="badge">'+escapeHtml(slot.loadLevel||'-')+'</span><span class="badge info">'+escapeHtml(slotTypeText[getSlotType(slot)]||getSlotType(slot))+'</span><span class="badge">'+escapeHtml(categoryText[slot.category]||slot.category||'外部工具')+'</span><span class="badge">流程：'+escapeHtml(stage.label)+'</span><span class="badge">互补：'+escapeHtml(slot.relationGroup||'未分组')+'</span><span class="badge '+(enabled?'ok':'disabled')+'">'+escapeHtml(enabled?'槽位已启用':'槽位已关闭')+'</span></div><ul class="tool-list" data-tool-list="'+escapeHtml(key)+'"></ul><div class="add-tool"><input data-add-input="'+escapeHtml(key)+'" placeholder="'+escapeHtml(recommendedTool)+'" aria-label="新增同类工具名称"><button class="add-button" data-add-slot="'+escapeHtml(key)+'" title="生成安装接入提示词">+</button></div>'; const list=card.querySelector('[data-tool-list]'); tools.forEach((toolName,index)=>{ const status=statuses.get(key+'::'+toolName)||'configured_unverified'; const item=document.createElement('li'); item.className='tool-item '+(priority&&index===0&&enabled&&!unavailableStatuses.has(status)?'primary':''); item.draggable=true; item.dataset.tool=toolName; item.dataset.slot=key; item.dataset.status=status; item.innerHTML='<span class="drag-handle" title="拖拽排序">⋮⋮</span><span class="order">'+(index+1)+'</span><span class="tool-name">'+escapeHtml(toolName)+'</span><span class="tool-status"><span class="badge '+statusLevel(status)+'">'+escapeHtml(statusText[status]||status)+'</span><span class="badge primary-badge '+(!enabled?'disabled':priority&&index===0&&!unavailableStatuses.has(status)?'ok':'info')+'">'+escapeHtml(!enabled?'已关闭':priority?(index===0?'生效':'备用'):'启用')+'</span></span>'; list.appendChild(item) }); grid.appendChild(card) }); root.appendChild(section) }); empty.classList.toggle('hidden',visibleCount>0); bindEquipmentEvents(root,equipment,registry) }
-function bindEquipmentEvents(root,equipment,registry){ root.querySelectorAll('input[type="checkbox"][data-slot]').forEach((input)=>{ input.addEventListener('change',async(event)=>{ const slot=event.target.dataset.slot; const enabled=event.target.checked; const card=event.target.closest('.card'); const list=card.querySelector('[data-tool-list]'); const summary=card.querySelector('.tool-summary .badge'); const enabledBadge=card.querySelector('.badges .badge:last-child'); try{ const res=await fetch('/api/toggle',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({slot,enabled})}); if(!res.ok) throw new Error(await res.text()); card.classList.toggle('disabled',!enabled); const slotConfig=equipment.slots?.[slot]||{}; const priority=isPrioritySlot(slotConfig); const first=list.querySelector('.tool-item')?.dataset.tool||'无'; const orderedStatuses=Array.from(list.querySelectorAll('.tool-item')).map((item)=>item.dataset.status||''); const allUnavailable=orderedStatuses.length && orderedStatuses.every((status)=>unavailableStatuses.has(status)); summary.textContent=enabled?(allUnavailable?'未安装 / 不可用':priority?first:'全部启用'):'已关闭'; summary.className='badge '+(enabled?(allUnavailable?'warning':'ok'):'disabled'); enabledBadge.textContent=enabled?'槽位已启用':'槽位已关闭'; enabledBadge.className='badge '+(enabled?'ok':'disabled'); updatePrimaryBadges(list,enabled,priority) }catch{ event.target.checked=!enabled; alert('切换失败，请查看终端日志。') } }) }); root.querySelectorAll('.tool-list').forEach((list)=>{ let dragged=null; list.addEventListener('dragstart',(event)=>{ const item=event.target.closest('.tool-item'); if(!item) return; dragged=item; item.classList.add('dragging'); event.dataTransfer.effectAllowed='move' }); list.addEventListener('dragend',()=>{ if(dragged) dragged.classList.remove('dragging'); dragged=null }); list.addEventListener('dragover',(event)=>{ event.preventDefault(); const target=event.target.closest('.tool-item'); if(!dragged||!target||target===dragged||target.parentElement!==list) return; const rect=target.getBoundingClientRect(); const before=event.clientY<rect.top+rect.height/2; list.insertBefore(dragged,before?target:target.nextSibling) }); list.addEventListener('drop',async(event)=>{ event.preventDefault(); const slotKey=list.dataset.toolList; const ordered=Array.from(list.querySelectorAll('.tool-item')).map((item)=>item.dataset.tool); const enabled=list.closest('.card').querySelector('input[type="checkbox"]').checked; const priority=isPrioritySlot(equipment.slots?.[slotKey]||{}); updatePrimaryBadges(list,enabled,priority); const summary=list.closest('.card').querySelector('.tool-summary .badge'); if(enabled) summary.textContent=priority?(ordered[0]||'无'):'全部启用'; try{ await persistOrder(slotKey,ordered) }catch{ alert('排序保存失败，请重新运行 ai-toolops doctor。') } }) }); root.querySelectorAll('[data-add-slot]').forEach((button)=>{ button.addEventListener('click',()=>{ const slotKey=button.dataset.addSlot; const slot=equipment.slots?.[slotKey]||{}; const input=root.querySelector('[data-add-input="'+CSS.escape(slotKey)+'"]'); const fallback=input?.getAttribute('placeholder')||slot.recommendedTool||getSlotTools(slot)[0]||''; const toolName=(input?.value||'').trim()||fallback; showPrompt(buildInstallPrompt({slotKey,slot,toolName,registryTool:registry.tools?.[toolName]})) }) }) }
-function buildGlobalToolPrompt(profile={}){ const project=profile.name||'当前项目'; return ['请在项目【'+project+'】中安装或接入一个新的 AI 开发工具，并纳入 AI ToolOps Manager 管理。','','要求：','1. 先判断工具属于哪个 Agent 流程阶段，例如 agent_rules / project_context / project_retrieval / planning / execution / validation / feedback。','2. 再判断它属于哪个能力槽位；优先复用已有槽位。','3. 如果没有合适槽位，使用 ai-toolops create-slot 创建，建议带上 --workflow-stage。','4. 不要直接手改 .ai-toolops/*.json；不要修改业务代码；不要默认开启上传、后台扫描、自动同步。','','示例：','ai-toolops create-slot prototype_tool --label "原型工具" --default-tool figma-skill --slot-type exclusive_priority --workflow-stage project_context','ai-toolops register-tool prototype_tool figma-skill --label "Figma Skill"','ai-toolops equip prototype_tool figma-skill','ai-toolops doctor','ai-toolops ui'].join('\\n') }
-function buildInstallPrompt({slotKey,slot,toolName,registryTool}){ const label=slot.label||slotKey; const hint=registryTool?.installHint||'请按该工具官方方式完成安装。'; const stage=slot.workflowStage||slotStageFallback[slotKey]||'execution'; return ['请在当前项目中安装并接入 AI ToolOps 的【'+label+'】工具：'+toolName+'。','','流程阶段：'+stage,'要求：','1. 先确认当前项目根目录，不要修改业务代码。','2. 按该工具官方方式安装：'+hint,'3. 如果这是 MCP 工具，只允许配置本地 MCP Client；不要默认上传代码，不要开启后台自动扫描，不要开启自动同步。','4. 不要直接手动修改 .ai-toolops/*.json。','5. 安装完成后，通过 ai-toolops 命令接入：','','ai-toolops register-tool '+slotKey+' '+toolName+' --label "'+toolName+'"','ai-toolops equip '+slotKey+' '+toolName,(getSlotType(slot)==='exclusive_priority'?'ai-toolops reorder-tools '+slotKey+' '+toolName:''),'ai-toolops toggle '+slotKey+' on','ai-toolops doctor','ai-toolops ui'].filter(Boolean).join('\\n') }
-function setupColumnsControl(){ const buttons=Array.from(document.querySelectorAll('[data-cols]')); const normalize=(value)=>['1','2','3','4'].includes(String(value))?String(value):'3'; const apply=(value)=>{ const cols=normalize(value); document.documentElement.style.setProperty('--equipment-columns',cols); buttons.forEach((button)=>button.classList.toggle('active',button.dataset.cols===cols)); localStorage.setItem('ai-toolops.equipment.columns',cols) }; buttons.forEach((button)=>button.addEventListener('click',()=>apply(button.dataset.cols))); apply(localStorage.getItem('ai-toolops.equipment.columns')||'3') }
-function showPrompt(text){ document.getElementById('promptPanel').classList.remove('hidden'); document.getElementById('promptText').value=text; document.getElementById('promptPanel').scrollIntoView({behavior:'smooth',block:'start'}) }
-setupThemeToggle()
-fetch('./data.json').then(r=>r.json()).then((data)=>{ const {equipment,profile,health,registry,capabilities,adapters,workflowStages}=data; document.getElementById('projectName').textContent=profile.name||'当前项目'; document.getElementById('projectMeta').textContent=[profile.packageManager,...(profile.framework||[])].filter(Boolean).join(' · '); renderHealth(health.summary||{}); renderDoctorSummary(health); renderChecks(health); renderAdapters(adapters||{adapters:{}}); setupDoctorToggle(); setupColumnsControl(); renderEquipment({equipment,health,registry:registry||{tools:{}},capabilities:capabilities||{capabilities:{}},workflowStages}); document.getElementById('globalAddToolBtn').addEventListener('click',()=>showPrompt(buildGlobalToolPrompt(profile||{}))); document.getElementById('copyPromptBtn').addEventListener('click',async()=>{ const text=document.getElementById('promptText').value; await navigator.clipboard.writeText(text); document.getElementById('copyPromptBtn').textContent='已复制'; setTimeout(()=>{document.getElementById('copyPromptBtn').textContent='复制提示词'},1200) }) }).catch((error)=>{ document.getElementById('equipmentGroups').innerHTML='<article class="card"><h4>加载失败</h4><p class="muted">'+escapeHtml(error.message)+'</p></article>' })`
+  { key:'agent_rules', label:'规则入口', desc:'同步 ToolOps 规则，统一 Agent 能力配置。' },
+  { key:'prompt_intake', label:'需求理解', desc:'整理需求、约束和验收标准。' },
+  { key:'project_context', label:'项目上下文', desc:'读取 README、架构文档和项目画像。' },
+  { key:'project_retrieval', label:'项目检索', desc:'目标明确直接读文件；入口不明使用语义搜索。' },
+  { key:'thinking_strategy', label:'思考策略', desc:'选择分析策略，控制 token 成本。' },
+  { key:'planning', label:'列计划', desc:'拆解需求为阶段、文件范围及风险点。' },
+  { key:'execution', label:'执行修改', desc:'按计划修改代码、配置或工具接入。' },
+  { key:'validation', label:'验证', desc:'运行 lint、test、build 确认结果。' },
+  { key:'feedback', label:'反馈', desc:'需要确认或风险选择时使用人工通道。' }
+];
+const slotStage = { agent_compatibility:'agent_rules', architecture_context:'project_context', exact_search:'project_retrieval', semantic_search:'project_retrieval', code_graph:'project_retrieval', build_validation:'validation', human_confirmation:'feedback' };
+const getTools = (s) => [...new Set([...(Array.isArray(s.tools)?s.tools:[]), s.active].filter(Boolean))];
+const isPriority = (s) => (s.slotType||'exclusive_priority') === 'exclusive_priority';
+const stageFor = (k, s) => s.workflowStage || slotStage[k] || 'execution';
+
+// Load data then render
+fetch('./data.json').then(r=>r.json()).then(data => {
+  const { equipment, profile, health, registry, capabilities, plugins, workflowStages } = data;
+  document.getElementById('projectName').textContent = profile.name || '项目';
+  document.getElementById('projectMeta').textContent = [profile.packageManager, ...(profile.framework||[])].filter(Boolean).join(' · ');
+  renderHealth(health.summary||{});
+  renderDoctorSummary(health);
+  renderChecks(health);
+  renderAdapters(data.adapters||{adapters:{}});
+  renderEquipment({equipment,health,registry:registry||{tools:{}},capabilities:capabilities||{}}, workflowStages);
+  renderSkills(plugins?.skills||{});
+  renderPluginTools(plugins?.tools||{}, equipment, health);
+  setupUI();
+}).catch(err => {
+  document.getElementById('equipmentGroups').innerHTML = '<div class="empty">加载失败: ' + escapeHtml(err.message) + '</div>';
+});
+
+function renderHealth(summary) {
+  const counts = summary.statusCounts||{};
+  document.getElementById('healthBox').innerHTML =
+    '<div class="eyebrow">Health</div>' +
+    '<div class="health-grid">' +
+      '<div class="health-chip"><strong>'+(summary.errors||0)+'</strong><span>错误</span></div>' +
+      '<div class="health-chip"><strong>'+(summary.warnings||0)+'</strong><span>警告</span></div>' +
+      '<div class="health-chip"><strong>'+(summary.info||0)+'</strong><span>提示</span></div>' +
+    '</div>' +
+    '<div class="status-mini"><span>已安装 '+(counts.installed||0)+'</span><span>项目内置 '+(counts.project_provided||0)+'</span><span>推荐 '+(counts.recommended_not_installed||0)+'</span></div>';
+}
+
+function renderDoctorSummary(health) {
+  const s = health.summary||{};
+  const c = health.checks||[];
+  const bl = c.reduce((a,i)=>{const k=i.level||'info'; a[k]=(a[k]||0)+1; return a},{});
+  document.getElementById('doctorSummary').innerHTML =
+    '<span class="summary-pill"><strong>'+(s.errors||bl.error||0)+'</strong>错误</span>' +
+    '<span class="summary-pill"><strong>'+(s.warnings||bl.warning||0)+'</strong>警告</span>' +
+    '<span class="summary-pill"><strong>'+(s.info||bl.info||0)+'</strong>提示</span>' +
+    '<span class="summary-pill"><strong>'+c.length+'</strong>检查项</span>';
+}
+
+function renderChecks(health) {
+  const root = document.getElementById('checksList');
+  const checks = (health.checks||[]).slice(0,80);
+  root.textContent = '';
+  if (!checks.length) { root.innerHTML = '<div class="empty">暂无检查结果。</div>'; return; }
+  checks.forEach(i => {
+    const row = document.createElement('div');
+    row.className = 'check-row ' + escapeHtml(i.level||'info');
+    row.innerHTML = '<div class="level">'+escapeHtml(i.level||'')+'</div><p>'+escapeHtml(i.message||'')+'</p>';
+    root.appendChild(row);
+  });
+}
+
+function renderAdapters(adapters) {
+  const items = Object.values(adapters.adapters||{});
+  const root = document.getElementById('adapterStrip');
+  if (!items.length) { root.innerHTML = ''; return; }
+  root.innerHTML = items.map(a =>
+    '<span class="adapter-pill"><strong>'+escapeHtml(a.label||a.id)+
+    '</strong><span class="badge '+(a.enabled===false?'disabled':'ok')+'">'+
+    escapeHtml(a.enabled===false?'关闭':'启用')+'</span></span>'
+  ).join('');
+}
+
+function renderEquipment({equipment,health,registry,capabilities}, workflowStages) {
+  const root = document.getElementById('equipmentGroups');
+  const empty = document.getElementById('emptyEquipment');
+  const statuses = new Map();
+  (health.slots||[]).forEach(s => (s.tools||[]).forEach(t => { if(s.slot&&t.tool&&t.status) statuses.set(s.slot+'::'+t.tool, t.status); }));
+  (health.checks||[]).forEach(i => { if(i.slot&&i.tool&&i.status&&!statuses.has(i.slot+'::'+i.tool)) statuses.set(i.slot+'::'+i.tool,i.status); });
+  const stages = (workflowStages&&workflowStages.length ? workflowStages : fallbackStages).map(s=>({...s,items:[]}));
+  const stageMap = new Map(stages.map(s=>[s.key,s]));
+  let visible = 0;
+  Object.entries(equipment.slots||{}).forEach(([key,slot]) => {
+    const tools = getTools(slot);
+    if (!tools.length) return;
+    const sk = stageFor(key, slot);
+    if (!stageMap.has(sk)) stageMap.set(sk, {key:sk,label:sk,desc:'',items:[]});
+    stageMap.get(sk).items.push({key,slot,tools});
+    visible++;
+  });
+  root.textContent = '';
+  [...stageMap.values()].forEach((stage, si) => {
+    if (!stage.items.length) return;
+    const sec = document.createElement('section');
+    sec.className = 'workflow-group';
+    sec.innerHTML =
+      '<div class="workflow-rail"><span class="workflow-index">'+(si+1)+
+      '</span><h3>'+escapeHtml(stage.label)+
+      '</h3><p>'+escapeHtml(stage.desc||'')+'</p></div><div class="workflow-grid"></div>';
+    const grid = sec.querySelector('.workflow-grid');
+    stage.items.sort((a,b) => (a.slot.relationGroup||'').localeCompare(b.slot.relationGroup||''));
+    stage.items.forEach(({key,slot,tools}) => {
+      const enabled = slot.enabled !== false;
+      const priority = isPriority(slot);
+      const slotStatuses = tools.map(t => statuses.get(key+'::'+t)||'configured_unverified');
+      const allUnavail = slotStatuses.length && slotStatuses.every(s => unavailable.has(s));
+      const summary = !enabled ? '已关闭' : allUnavail ? '不可用' : priority ? tools[0] : '全部启用';
+      const cat = slot.category||'external_tool';
+      const card = document.createElement('article');
+      card.className = 'card '+cat+(enabled?'':' disabled')+(allUnavail?'':'');
+      const cond = conditionText(key,slot,tools,registry);
+      card.innerHTML =
+        '<div class="card-top"><div><h4>'+escapeHtml(slot.label)+'</h4><div class="slot-key">'+escapeHtml(key)+'</div></div>' +
+        '<label class="switch"><input type="checkbox" '+(enabled?'checked':'')+' data-slot="'+escapeHtml(key)+'"><span class="slider"></span></label></div>' +
+        '<div class="tool-summary"><strong>'+(allUnavail?'状态：':priority?'生效：':'启用：')+'</strong><span class="badge '+(!enabled?'disabled':allUnavail?'warning':'ok')+'">'+escapeHtml(summary)+'</span></div>' +
+        '<div class="meta-line">Fallback：'+escapeHtml((slot.fallback||[]).join(', ')||'无')+'</div>' +
+        (cond?'<div class="condition-line"><strong>条件：</strong>'+escapeHtml(cond)+'</div>':'') +
+        '<div class="badges">' +
+          '<span class="badge">'+escapeHtml(slot.loadLevel||'-')+'</span>' +
+          '<span class="badge info">'+escapeHtml(slotTypeText[slot.slotType]||slot.slotType||'')+'</span>' +
+          '<span class="badge">'+escapeHtml(categoryText[cat]||cat)+'</span>' +
+          '<span class="badge '+(enabled?'ok':'disabled')+'">'+escapeHtml(enabled?'启用':'关闭')+'</span>' +
+        '</div>' +
+        '<ul class="tool-list" data-tool-list="'+escapeHtml(key)+'"></ul>' +
+        '<div class="add-tool">' +
+          '<input data-add-input="'+escapeHtml(key)+'" placeholder="'+(slot.recommendedTool||'输入工具名')+'" />' +
+          '<button class="add-button" data-add-slot="'+escapeHtml(key)+'">+</button>' +
+        '</div>';
+      const list = card.querySelector('[data-tool-list]');
+      tools.forEach((tn, idx) => {
+        const st = statuses.get(key+'::'+tn)||'configured_unverified';
+        const li = document.createElement('li');
+        li.className = 'tool-item'+(priority&&idx===0&&enabled&&!unavailable.has(st)?' primary':'');
+        li.draggable = true;
+        li.dataset.tool = tn; li.dataset.slot = key; li.dataset.status = st;
+        li.innerHTML = '<span class="drag-handle">⋮⋮</span><span class="order">'+(idx+1)+
+          '</span><span class="tool-name">'+escapeHtml(tn)+'</span>' +
+          '<span class="tool-status"><span class="badge '+statusLevel(st)+'">'+escapeHtml(statusText[st]||st)+
+          '</span><span class="badge primary-badge '+(!enabled?'disabled':priority&&idx===0&&!unavailable.has(st)?'ok':'info')+'">'+
+          escapeHtml(!enabled?'关闭':priority?(idx===0?'生效':'备用'):'启用')+'</span></span>';
+        list.appendChild(li);
+      });
+      grid.appendChild(card);
+    });
+    root.appendChild(sec);
+  });
+  empty.classList.toggle('hidden', visible>0);
+  bindEquipmentEvents(root, equipment, registry);
+}
+
+function conditionText(key,slot,tools,registry) {
+  if (key==='semantic_search') return '入口/调用链不明确时优先，无结果再用精确搜索兜底。';
+  if (key==='exact_search') return '目标明确、需路径校验时使用。';
+  if (key==='human_confirmation') return '关键范围/接口契约/高风险操作或结束反馈时使用。';
+  const t = tools[0]; const u = registry.tools?.[t]?.useWhen||[];
+  return u.length ? u.slice(0,2).join(' / ') : '';
+}
+
+function renderSkills(skills) {
+  const root = document.getElementById('skillsList');
+  const empty = document.getElementById('emptySkills');
+  const items = Object.values(skills).filter(s=>s.enabled!==false);
+  root.textContent = '';
+  if (!items.length) { empty.classList.remove('hidden'); return; }
+  empty.classList.add('hidden');
+  items.forEach(s => {
+    const card = document.createElement('div');
+    card.className = 'skill-card';
+    card.innerHTML =
+      '<div class="skill-card-left"><h4>'+escapeHtml(s.label||s.name)+'</h4>' +
+      '<p>'+escapeHtml(s.description||'')+'</p></div>' +
+      '<label class="switch"><input type="checkbox" checked disabled><span class="slider"></span></label>';
+    root.appendChild(card);
+  });
+}
+
+function renderPluginTools(tools, equipment, health) {
+  const root = document.getElementById('pluginToolsList');
+  root.textContent = '';
+  Object.entries(tools).forEach(([name, tool]) => {
+    const slot = Object.entries(equipment.slots||{}).find(([k,s]) => getTools(s).includes(name));
+    const item = document.createElement('div');
+    item.className = 'plugin-item';
+    item.innerHTML =
+      '<div class="plugin-info"><span class="plugin-name">'+escapeHtml(tool.label||name)+
+      '</span><span class="plugin-desc"> — '+escapeHtml(name)+
+      (slot?' <span class="badge ok">已装备</span>':'')+'</span></div>' +
+      '<span class="badge '+(tool.capabilities?.length?'info':'disabled')+'">'+escapeHtml((tool.capabilities||[]).join(', '))+'</span>';
+    root.appendChild(item);
+  });
+}
+
+function bindEquipmentEvents(root, equipment, registry) {
+  root.querySelectorAll('input[type="checkbox"][data-slot]').forEach(input => {
+    input.addEventListener('change', async e => {
+      const slot = e.target.dataset.slot;
+      const enabled = e.target.checked;
+      const card = e.target.closest('.card');
+      const list = card.querySelector('[data-tool-list]');
+      try {
+        const res = await fetch('/api/toggle', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({slot,enabled})});
+        if (!res.ok) throw new Error(await res.text());
+        card.classList.toggle('disabled', !enabled);
+        updateBadges(list, enabled, isPriority(equipment.slots?.[slot]||{}));
+      } catch { e.target.checked = !enabled; alert('切换失败'); }
+    });
+  });
+  root.querySelectorAll('.tool-list').forEach(list => {
+    let dragged = null;
+    list.addEventListener('dragstart', e => {
+      const item = e.target.closest('.tool-item');
+      if (!item) return; dragged = item; item.classList.add('dragging');
+    });
+    list.addEventListener('dragend', () => { if(dragged) { dragged.classList.remove('dragging'); dragged=null; } });
+    list.addEventListener('dragover', e => {
+      e.preventDefault();
+      const t = e.target.closest('.tool-item');
+      if (!dragged||!t||t===dragged||t.parentElement!==list) return;
+      const rect = t.getBoundingClientRect();
+      list.insertBefore(dragged, e.clientY < rect.top+rect.height/2 ? t : t.nextSibling);
+    });
+    list.addEventListener('drop', async e => {
+      e.preventDefault();
+      const sk = list.dataset.toolList;
+      const ordered = [...list.querySelectorAll('.tool-item')].map(i => i.dataset.tool);
+      const enabled = list.closest('.card').querySelector('input[type="checkbox"]').checked;
+      try {
+        const res = await fetch('/api/reorder-tools', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({slot:sk,tools:ordered})});
+        if (!res.ok) throw new Error(await res.text());
+        updateBadges(list, enabled, isPriority(equipment.slots?.[sk]||{}));
+      } catch { alert('排序保存失败'); }
+    });
+  });
+  root.querySelectorAll('[data-add-slot]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const sk = btn.dataset.addSlot;
+      const slot = equipment.slots?.[sk]||{};
+      const input = root.querySelector('[data-add-input="'+CSS.escape(sk)+'"]');
+      const fallback = input?.placeholder || slot.recommendedTool || getTools(slot)[0] || '';
+      const toolName = (input?.value||'').trim() || fallback;
+      const hint = registry.tools?.[toolName]?.installHint || '请按官方方式安装。';
+      showPrompt(buildPrompt({slotKey:sk,slot,toolName,hint}));
+    });
+  });
+}
+
+function updateBadges(list, enabled, priority) {
+  const items = [...list.querySelectorAll('.tool-item')];
+  items.forEach((item, i) => {
+    const st = item.dataset.status;
+    const prim = priority && i===0 && enabled && !unavailable.has(st);
+    item.classList.toggle('primary', prim);
+    item.querySelector('.order').textContent = String(i+1);
+    const badge = item.querySelector('.primary-badge');
+    badge.textContent = !enabled ? '关闭' : priority ? (i===0?'生效':'备用') : '启用';
+    badge.className = 'badge primary-badge ' + (!enabled?'disabled':prim?'ok':'info');
+  });
+}
+
+function buildPrompt({slotKey,slot,toolName,hint}) {
+  return [
+    '请在项目中安装并接入 AI ToolOps 的【'+(slot.label||slotKey)+'】工具：'+toolName+'。','',
+    '要求：','1. 按官方方式安装：'+hint,
+    '2. 不要直接手改 .ai-toolops/*.json。',
+    '3. 安装完成后通过命令接入：','',
+    'ai-toolops register-tool '+slotKey+' '+toolName+' --label "'+toolName+'"',
+    'ai-toolops equip '+slotKey+' '+toolName,
+    'ai-toolops toggle '+slotKey+' on',
+    'ai-toolops doctor'
+  ].join('\\n');
+}
+
+function showPrompt(text) {
+  document.getElementById('promptPanel').classList.remove('hidden');
+  document.getElementById('promptText').value = text;
+  document.getElementById('promptPanel').scrollIntoView({behavior:'smooth',block:'start'});
+}
+
+function setupUI() {
+  // Theme toggle
+  const stored = localStorage.getItem('ai-toolops.theme');
+  const applyTheme = (v) => {
+    document.body.dataset.theme = v;
+    localStorage.setItem('ai-toolops.theme', v);
+  };
+  applyTheme(stored || 'night');
+  document.querySelectorAll('[data-theme-choice]').forEach(b => {
+    b.addEventListener('click', () => applyTheme(b.dataset.themeChoice));
+  });
+
+  // Tabs
+  document.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+      tab.classList.add('active');
+      const panel = document.getElementById(tab.dataset.tab+'Panel');
+      if (panel) panel.classList.add('active');
+    });
+  });
+
+  // Doctor toggle
+  const body = document.getElementById('doctorBody');
+  const btn = document.getElementById('toggleDoctorBtn');
+  btn.addEventListener('click', () => {
+    body.classList.toggle('collapsed');
+    btn.textContent = body.classList.contains('collapsed') ? '展开' : '收起';
+  });
+
+  // Columns control
+  const colBtns = document.querySelectorAll('[data-cols]');
+  colBtns.forEach(b => {
+    b.addEventListener('click', () => {
+      const cols = b.dataset.cols;
+      document.documentElement.style.setProperty('--equipment-columns', cols);
+      colBtns.forEach(c => c.classList.toggle('active', c.dataset.cols === cols));
+      localStorage.setItem('ai-toolops.equipment.columns', cols);
+    });
+  });
+  const savedCols = localStorage.getItem('ai-toolops.equipment.columns') || '3';
+  document.documentElement.style.setProperty('--equipment-columns', savedCols);
+  colBtns.forEach(c => c.classList.toggle('active', c.dataset.cols === savedCols));
+
+  // Global add tool
+  document.getElementById('globalAddToolBtn').addEventListener('click', () => {
+    showPrompt('请在项目中安装或接入一个新的 AI 开发工具。\\n\\n要求：\\n1. 判断属于哪个流程阶段和能力槽位；优先复用已有槽位。\\n2. 没有合适槽位时使用 ai-toolops create-slot 创建。\\n3. 不要手改 .ai-toolops/*.json。\\n4. 通过 ai-toolops 命令完成接入。');
+  });
+
+  // Copy prompt
+  document.getElementById('copyPromptBtn').addEventListener('click', async () => {
+    const text = document.getElementById('promptText').value;
+    await navigator.clipboard.writeText(text);
+    document.getElementById('copyPromptBtn').textContent = '已复制';
+    setTimeout(() => { document.getElementById('copyPromptBtn').textContent = '复制'; }, 1200);
+  });
+
+  // Scan plugins
+  document.getElementById('scanPluginsBtn').addEventListener('click', () => {
+    fetch('/api/plugin-scan', {method:'POST'}).then(r=>r.json()).then(() => location.reload()).catch(() => alert('扫描失败'));
+  });
+}`
 }

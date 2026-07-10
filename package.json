@@ -1,6 +1,6 @@
 {
   "name": "ai-toolops-manager",
-  "version": "0.1.14",
+  "version": "0.2.0",
   "description": "Local-first AI tool capability and equipment manager for AI development workflows.",
   "type": "module",
   "bin": {

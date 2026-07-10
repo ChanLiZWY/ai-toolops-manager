@@ -3,3 +3,4 @@ node_modules
 .ai-toolops
 coverage
 dist
+.codex
