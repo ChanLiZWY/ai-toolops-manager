@@ -1,21 +1,22 @@
 {
   "name": "ai-toolops-manager",
-  "version": "0.2.0",
-  "description": "Local-first AI tool capability and equipment manager for AI development workflows.",
+  "version": "1.0.0",
+  "description": "Windows-local AI tool lifecycle and Agent context manager.",
   "type": "module",
   "bin": {
     "ai-toolops": "./bin/ai-toolops.js"
   },
   "scripts": {
     "start": "node bin/ai-toolops.js",
-    "scan": "node bin/ai-toolops.js scan",
-    "init:demo": "node bin/ai-toolops.js init --yes",
+    "context": "node bin/ai-toolops.js context",
+    "init:demo": "node bin/ai-toolops.js init",
     "doctor": "node bin/ai-toolops.js doctor",
     "ui": "node bin/ai-toolops.js ui",
-    "check": "node --check bin/ai-toolops.js && node --check src/cli.js && node --check src/utils.js && node --check src/scanner/projectScanner.js && node --check src/scanner/mcpScanner.js && node --check src/plugin/scanner.js && node --check src/core/rollback.js && node --check src/core/doctor.js && node --check src/core/equipmentModel.js && node --check src/core/workflow.js && node --check src/core/adapterConfig.js && node --check src/core/registries.js && node --check src/core/policyGenerator.js && node --check src/adapters/agentAdapters.js && node --check src/ui/generateUi.js && node --check scripts/install-local.js && node --check test/plugin-scanner.test.js && node --check test/core-regressions.test.js",
+    "check": "node --check bin/ai-toolops.js && node --check src/cli.js && node --check src/args.js && node --check src/setup/bootstrap.js && node --check src/v1/config.js && node --check src/v1/windows-store.js && node --check src/v1/agents.js && node --check src/v1/agent-adapters.js && node --check src/v1/resolver.js && node --check src/v1/doctor.js && node --check src/v1/migration.js && node --check src/v1/transaction.js && node --check src/v1/lifecycle.js && node --check src/v1/migration-executor.js && node --check src/v1/self-update.js && node --check src/v1/providers/registry.js && node --check src/v1/providers/external-command.js && node --check src/v1/providers/rg.js && node --check src/v1/ui/html.js && node --check src/v1/ui/styles.js && node --check src/v1/ui/app.js && node --check src/v1/ui/projects.js && node --check src/v1/ui/server.js && node --check scripts/build-windows.js && node --check scripts/smoke-windows-ui.js && node --check scripts/smoke-windows-setup.js && node --check test/v1-core.test.js && node --check test/v1-lifecycle.test.js && node --check test/v1-distribution.test.js && node --check test/v1-ui.test.js",
     "test": "node --test --test-concurrency=1",
-    "install:local": "node scripts/install-local.js",
-    "setup:project": "node bin/ai-toolops.js setup"
+    "setup:project": "node bin/ai-toolops.js init",
+    "build:windows": "node scripts/build-windows.js",
+    "smoke:windows": "dist\\ai-toolops.exe --version && dist\\ai-toolops-setup.exe --help && node scripts/smoke-windows-ui.js && node scripts/smoke-windows-setup.js"
   },
   "keywords": [
     "ai",
@@ -29,6 +30,13 @@
   "author": "",
   "license": "MIT",
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=22.0.0"
+  },
+  "dependencies": {
+    "yaml": "^2.8.1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.8",
+    "postject": "^1.0.0-alpha.6"
   }
 }

@@ -1,617 +1,297 @@
 import path from 'node:path'
-import { scanProject, buildProjectDna } from './scanner/projectScanner.js'
-import { defaultCapabilities, defaultToolRegistry, buildEquipment } from './core/registries.js'
-import { runDoctor } from './core/doctor.js'
-import { createSnapshot, rollbackLatest } from './core/rollback.js'
-import { generateAdapterOutputs } from './adapters/agentAdapters.js'
-import { defaultAdapters, normalizeAdapters, setAdapterEnabled } from './core/adapterConfig.js'
-import { generatePolicyOutputs, renderAgentRulesInclude } from './core/policyGenerator.js'
-import { generateUi } from './ui/generateUi.js'
-import { SLOT_TYPES, normalizeEquipment, promoteTool, setSlotTools, reorderSlotTools, getSlotTools } from './core/equipmentModel.js'
-import { WORKFLOW_STAGE_KEYS, normalizeWorkflowStage, workflowStageLabel } from './core/workflow.js'
-import { cwdPath, ensureDir, parseArgs, safeTimestamp, serveStatic, timestamp, writeJson, writeText, readJson, readText } from './utils.js'
-import { scanAndWriteRegistry, readPluginRegistry, recordSkillUsage, setSkillEnabled } from './plugin/scanner.js'
+import readline from 'node:readline/promises'
+import { parseArgs } from './args.js'
+import {
+  defaultLock,
+  defaultPolicy,
+  projectPaths,
+  readProjectConfig,
+  serializePolicy,
+  writeProjectConfig
+} from './v1/config.js'
+import { resolveContext, renderContext } from './v1/resolver.js'
+import { runDoctorV1 } from './v1/doctor.js'
+import { analyzeMigration } from './v1/migration.js'
+import { applyLifecycle, bootstrapLocked, installedTools, planLifecycle } from './v1/lifecycle.js'
+import {
+  applyMigration,
+  applyMigrationRollback,
+  planMigration,
+  planMigrationRollback
+} from './v1/migration-executor.js'
+import {
+  agentStatus,
+  applyAgentBinding,
+  detectCurrentAgent,
+  planAgentBinding
+} from './v1/agent-adapters.js'
+import { applySelfUpdate, planSelfUpdate } from './v1/self-update.js'
+import { startUiServer } from './v1/ui/server.js'
+
+const VERSION = '1.0.0'
+const LEGACY_CONTEXT_ALIASES = new Set(['generate-agent-rules', 'sync-agent-rules'])
+const REMOVED_LEGACY_COMMANDS = new Set(['equip', 'unequip', 'toggle', 'reorder-tools', 'register-tool', 'create-slot', 'adapters', 'plugin', 'skill', 'rollback'])
 
 export async function main(args) {
   const { flags, positionals } = parseArgs(args)
-  if (flags.get('project')) process.chdir(path.resolve(String(flags.get('project'))))
-  const command = positionals[0] || 'help'
-  switch (command) {
-    case 'init': return init(flags)
-    case 'scan': return scan()
-    case 'doctor': return doctor(flags)
-    case 'ui': return ui(flags)
-    case 'rollback': return rollback()
-    case 'equip': return equip(positionals[1], positionals[2])
-    case 'unequip': return unequip(positionals[1])
-    case 'toggle': return toggle(positionals[1], positionals[2])
-    case 'reorder-tools': return reorderTools(positionals[1], positionals.slice(2))
-    case 'register-tool': return registerTool(positionals[1], positionals[2], flags)
-    case 'create-slot': return createSlot(positionals[1], flags)
-    case 'generate-agent-rules': return generateAgentRules(flags)
-    case 'sync-agent-rules': return generateAgentRules(new Map([...flags, ['apply', true]]))
-    case 'setup': return setup(flags)
-    case 'adapters': return adaptersCommand(positionals[1], positionals[2])
-    case 'plugin': return pluginCommand(positionals[1], positionals.slice(2), flags)
-    case 'skill': return skillCommand(positionals[1], positionals[2], flags)
-    case 'help':
-    default: return help()
+  const projectRoot = path.resolve(String(flags.get('project') || process.cwd()))
+  const command = positionals[0] || 'ui'
+  if (command === '--version' || command === '-v' || command === 'version' || flags.get('version') || flags.get('v')) return output(VERSION, flags)
+  if (command === 'help' || flags.get('help') || flags.get('h')) return help()
+  if (command === 'init') return initCommand({ projectRoot, flags })
+  if (command === 'context') return contextCommand({ projectRoot, flags })
+  if (command === 'doctor') return doctorCommand({ projectRoot, flags })
+  if (command === 'install') return lifecycleCommand('install', positionals[1], { projectRoot, flags })
+  if (command === 'update') return updateCommand(positionals[1], { projectRoot, flags })
+  if (command === 'uninstall') return lifecycleCommand('uninstall', positionals[1], { projectRoot, flags })
+  if (command === 'bootstrap') return bootstrapCommand({ projectRoot, flags })
+  if (command === 'config') return configCommand(positionals.slice(1), { projectRoot, flags })
+  if (command === 'migrate') return migrateCommand({ projectRoot, flags, action: positionals[1], id: positionals[2] })
+  if (command === 'ui') return uiCommand({ projectRoot, flags })
+  if (command === 'agent') return agentCommand(positionals.slice(1), { projectRoot, flags })
+  if (command === 'setup') {
+    deprecation('setup', 'init')
+    return initCommand({ projectRoot, flags })
   }
+  if (command === 'scan') {
+    deprecation('scan', 'doctor')
+    return doctorCommand({ projectRoot, flags })
+  }
+  if (LEGACY_CONTEXT_ALIASES.has(command)) {
+    deprecation(command, 'context')
+    return contextCommand({ projectRoot, flags })
+  }
+  if (REMOVED_LEGACY_COMMANDS.has(command)) {
+    throw new Error(`旧命令 ${command} 不再直接修改项目 JSON。请运行 ai-toolops migrate --dry-run，并使用 init/install/config/agent 新命令。`)
+  }
+  throw new Error(`未知命令：${command}。运行 ai-toolops help 查看可用命令。`)
+}
+
+function initCommand({ projectRoot, flags }) {
+  assertWindows()
+  const current = readProjectConfig(projectRoot, { allowMissing: true })
+  if (current.initialized) {
+    const result = { ok: current.errors.length === 0, changed: false, message: current.errors.length ? current.errors.join('；') : '项目已经初始化', files: [relative(projectRoot, current.policy), relative(projectRoot, current.lock)] }
+    return output(result, flags)
+  }
+  const legacy = analyzeMigration(projectRoot)
+  if (legacy.legacyFiles.length) {
+    throw new Error('检测到旧版 .ai-toolops 配置。请先运行 ai-toolops migrate --dry-run；Phase 2 提供正式迁移。')
+  }
+  const policy = defaultPolicy()
+  const lock = defaultLock()
+  const paths = projectPaths(projectRoot)
+  const plan = {
+    action: 'init',
+    dryRun: Boolean(flags.get('dry-run')),
+    writes: [
+      { path: relative(projectRoot, paths.policy), content: serializePolicy(policy) },
+      { path: relative(projectRoot, paths.lock), content: `${JSON.stringify(lock, null, 2)}\n` }
+    ]
+  }
+  if (flags.get('dry-run')) return output(plan, flags)
+  writeProjectConfig(projectRoot, policy, lock)
+  return output({ ok: true, changed: true, message: '项目初始化完成', files: plan.writes.map((item) => item.path) }, flags)
+}
+
+function contextCommand({ projectRoot, flags }) {
+  const context = resolveContext({
+    projectRoot,
+    agent: String(flags.get('agent') || 'auto')
+  })
+  if (flags.get('strict') && context.capabilities.some((item) => item.required && item.status.resolution !== 'ready')) process.exitCode = 1
+  return output(flags.get('json') ? context : renderContext(context), flags, { alreadySelected: true })
+}
+
+function doctorCommand({ projectRoot, flags }) {
+  const report = runDoctorV1({
+    projectRoot,
+    agent: String(flags.get('agent') || 'auto')
+  })
+  if (flags.get('strict') && !report.healthy) process.exitCode = 1
+  if (flags.get('json')) return output(report, flags)
+  const lines = [`AI ToolOps Doctor: ${report.healthy ? 'healthy' : 'needs-attention'}`]
+  for (const check of report.checks) {
+    lines.push(`${check.level === 'ok' ? 'OK' : check.level.toUpperCase()} ${check.id} - ${check.message}`)
+    if (check.recovery) lines.push(`  恢复：${check.recovery}`)
+  }
+  return output(`${lines.join('\n')}\n`, flags, { alreadySelected: true })
+}
+
+async function lifecycleCommand(action, tool, { projectRoot, flags }) {
+  if (!tool) throw new Error(`用法：ai-toolops ${action} <tool>`)
+  const plan = planLifecycle(action, tool, {
+    projectRoot,
+    version: flagString(flags, 'version'),
+    source: flagString(flags, 'source'),
+    checksum: flagString(flags, 'checksum')
+  })
+  if (flags.get('dry-run')) return output({ dryRun: true, plan }, flags)
+  const confirmed = await confirmPlan(plan, flags)
+  return output(await applyLifecycle(plan, { confirmed }), flags)
+}
+
+async function updateCommand(tool, { projectRoot, flags }) {
+  if (tool === 'self') {
+    const plan = planSelfUpdate({
+      source: flagString(flags, 'source'),
+      checksum: flagString(flags, 'checksum'),
+      checksumSource: flagString(flags, 'checksum-source'),
+      target: flagString(flags, 'target')
+    })
+    if (flags.get('dry-run')) return output({ dryRun: true, plan }, flags)
+    return output(await applySelfUpdate(plan, { confirmed: await confirmPlan(plan, flags), launchHelper: true }), flags)
+  }
+  const targets = flags.get('all') ? Object.keys(installedTools()) : [tool].filter(Boolean)
+  if (!targets.length) throw new Error('用法：ai-toolops update <tool> 或 ai-toolops update --all')
+  const plans = targets.map((target) => planLifecycle('update', target, {
+    projectRoot,
+    version: flagString(flags, 'version'),
+    source: flagString(flags, 'source'),
+    checksum: flagString(flags, 'checksum')
+  }))
+  if (flags.get('dry-run')) return output({ dryRun: true, plans }, flags)
+  const results = []
+  for (const plan of plans) results.push(await applyLifecycle(plan, { confirmed: await confirmPlan(plan, flags) }))
+  return output({ plans, results }, flags)
+}
+
+async function bootstrapCommand({ projectRoot, flags }) {
+  if (!flags.get('locked')) throw new Error('v1 只支持 ai-toolops bootstrap --locked')
+  if (flags.get('dry-run')) return output(await bootstrapLocked({ projectRoot, dryRun: true }), flags)
+  const preview = await bootstrapLocked({ projectRoot, dryRun: true })
+  if (!preview.plans.length) return output({ ok: true, changed: false, message: '锁定工具均已满足' }, flags)
+  const confirmed = await confirmPlans(preview.plans, flags)
+  return output(await bootstrapLocked({ projectRoot, confirmed }), flags)
+}
+
+async function configCommand(args, { projectRoot, flags }) {
+  const [area, action, tool] = args
+  if (area !== 'external-tool' || action !== 'add' || !tool || !flags.get('path')) {
+    throw new Error('用法：ai-toolops config external-tool add <name> --path <绝对路径>')
+  }
+  const plan = planLifecycle('register', tool, {
+    projectRoot,
+    providerId: 'external-command',
+    externalPath: String(flags.get('path'))
+  })
+  if (flags.get('dry-run')) return output({ dryRun: true, plan }, flags)
+  return output(await applyLifecycle(plan, { confirmed: await confirmPlan(plan, flags) }), flags)
+}
+
+async function migrateCommand({ projectRoot, flags, action, id }) {
+  if (flags.get('dry-run') || action === 'preview') return output(analyzeMigration(projectRoot), flags)
+  if (action === 'rollback') {
+    const plan = planMigrationRollback(projectRoot, id)
+    return output(await applyMigrationRollback(plan, { confirmed: await confirmPlan(plan, flags) }), flags)
+  }
+  if (action) throw new Error('用法：ai-toolops migrate --dry-run | ai-toolops migrate --yes | ai-toolops migrate rollback [id] --yes')
+  const plan = planMigration(projectRoot)
+  return output(await applyMigration(plan, { confirmed: await confirmPlan(plan, flags) }), flags)
+}
+
+async function agentCommand(args, { projectRoot, flags }) {
+  const [action, agentId] = args
+  if (action === 'detect') return output(detectCurrentAgent({ agent: agentId || flags.get('agent') || 'auto' }), flags)
+  if (action === 'status') {
+    if (agentId) return output(agentStatus(agentId, { projectRoot }), flags)
+    return output(['codex', 'claude', 'roo'].map((id) => agentStatus(id, { projectRoot })), flags)
+  }
+  if (!['bind', 'unbind'].includes(action) || !agentId) {
+    throw new Error('用法：ai-toolops agent detect | status [agent] | bind|unbind <codex|claude|roo>')
+  }
+  const plan = planAgentBinding(action, agentId)
+  if (flags.get('dry-run')) return output({ dryRun: true, plan }, flags)
+  return output(await applyAgentBinding(plan, { confirmed: await confirmPlan(plan, flags) }), flags)
+}
+
+function uiCommand({ projectRoot, flags }) {
+  const result = startUiServer({
+    projectRoot,
+    agent: String(flags.get('agent') || 'auto'),
+    port: Number(flags.get('port') || process.env.AI_TOOLOPS_UI_PORT || 4177),
+    open: !flags.get('no-open') && process.env.AI_TOOLOPS_UI_NO_OPEN !== '1',
+    onListening: ({ url }) => console.log(`AI ToolOps UI: ${url}`)
+  })
+  return result
+}
+
+function phasePending(command, phase) {
+  throw new Error(`${command} 将在 ${phase} 实现；当前版本不会用提示词冒充真实操作。`)
+}
+
+async function confirmPlan(plan, flags) {
+  return confirmPlans([plan], flags)
+}
+
+async function confirmPlans(plans, flags) {
+  if (flags.get('yes')) return true
+  if (!process.stdin.isTTY || flags.get('json')) {
+    throw new Error('非交互变更必须使用 --yes；预览使用 --dry-run')
+  }
+  console.log(JSON.stringify({ plans }, null, 2))
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+  try {
+    const answer = await rl.question('应用以上变更？输入 yes 继续：')
+    if (answer.trim().toLowerCase() !== 'yes') throw new Error('用户取消操作')
+    return true
+  } finally {
+    rl.close()
+  }
+}
+
+function flagString(flags, key) {
+  const value = flags.get(key)
+  return value === true || value === undefined ? undefined : String(value)
+}
+
+function assertWindows() {
+  if (process.platform !== 'win32') throw new Error(`Windows v1 不支持当前平台：${process.platform}`)
+  if (process.arch !== 'x64') throw new Error(`Windows v1 不支持当前架构：${process.arch}`)
+}
+
+function output(value, flags, options = {}) {
+  if (options.alreadySelected) {
+    process.stdout.write(typeof value === 'string' ? value : `${JSON.stringify(value, null, 2)}\n`)
+    return value
+  }
+  if (flags?.get('json') || typeof value !== 'string') console.log(typeof value === 'string' ? JSON.stringify({ value }, null, 2) : JSON.stringify(value, null, 2))
+  else process.stdout.write(value.endsWith('\n') ? value : `${value}\n`)
+  return value
+}
+
+function deprecation(oldCommand, nextCommand) {
+  console.error(`DEPRECATED: ${oldCommand} 将在下一版本删除，请改用 ai-toolops ${nextCommand}。`)
+}
+
+function relative(root, file) {
+  return path.relative(root, file).replaceAll(path.sep, '/')
 }
 
 function help() {
-  console.log(`AI ToolOps Manager
+  const text = `AI ToolOps Manager ${VERSION}
+
+Windows 10/11 x64 local-first tool manager.
+
+Double-click ai-toolops.exe or run ai-toolops without arguments to open the local UI.
+Run ai-toolops --help to display this help.
 
 Commands:
-  ai-toolops init [--yes]                         初始化当前项目
-  ai-toolops scan                                 扫描并打印项目画像
-  ai-toolops doctor                               检查装备健康状态并生成 UI 数据
-  ai-toolops ui [--port 4177]                     生成并打开装备栏静态服务
-  ai-toolops equip <slot> <tool>                  将工具加入槽位并置顶，第一项生效
-  ai-toolops unequip <slot>                       清空能力槽位
-  ai-toolops toggle <slot> on|off                 启用或禁用槽位
-  ai-toolops reorder-tools <slot> <tool...>       调整同槽位工具优先级，第一项生效
-  ai-toolops register-tool <slot> <tool> [--label] 注册工具
-  ai-toolops create-slot <slot> --label 名称       新增能力槽位
-  ai-toolops generate-agent-rules [--apply]       生成 Agent 规则与有效策略
-  ai-toolops sync-agent-rules                     同步 AGENTS.md 引用块
-  ai-toolops setup [--project 路径] [--ui]        一步初始化/升级
-  ai-toolops adapters list|enable|disable [id]    管理 Agent 适配器
-  ai-toolops plugin scan|list                     扫描/列出插件
-  ai-toolops skill scan|list|enable|disable|use 扫描、管理和记录 Skill 使用
-  ai-toolops rollback                             恢复最近快照
-`)
+  ai-toolops init [--dry-run]                   初始化项目意图和锁文件
+  ai-toolops context [--agent auto] [--json]   输出当前 Agent 的能力上下文
+  ai-toolops doctor [--strict] [--json]        只读检查项目、电脑和 Agent 状态
+  ai-toolops install <tool> [--dry-run]         安装工具
+  ai-toolops update [tool|--all|self]           更新工具或 ToolOps
+  ai-toolops uninstall <tool>                   卸载工具
+  ai-toolops bootstrap --locked                 按锁文件恢复电脑环境
+  ai-toolops migrate --dry-run                  预检旧项目迁移
+  ai-toolops agent ...                          管理 Agent 隔离绑定
+  ai-toolops config ...                         管理高级项目策略
+  ai-toolops ui                                 打开本地管理界面
+
+Common options:
+  --project <path>  --agent <auto|generic|codex|claude|roo>  --json  --dry-run  --yes
+`
+  process.stdout.write(text)
+  return text
 }
-
-
-
-function upgradeCapabilities(capabilities) {
-  const defaults = defaultCapabilities()
-  capabilities ||= defaults
-  capabilities.capabilities ||= {}
-  capabilities.capabilities = { ...Object.fromEntries(Object.entries(defaults.capabilities).map(([key, value]) => [key, { ...value, ...(capabilities.capabilities[key] || {}) }])), ...Object.fromEntries(Object.entries(capabilities.capabilities).filter(([key]) => !defaults.capabilities[key])) }
-  if (capabilities.capabilities.agent_adapter) delete capabilities.capabilities.agent_adapter
-  capabilities.capabilities.agent_compatibility = { ...defaults.capabilities.agent_compatibility, ...(capabilities.capabilities.agent_compatibility || {}) }
-  capabilities.capabilities.human_confirmation = { ...defaults.capabilities.human_confirmation, ...(capabilities.capabilities.human_confirmation || {}) }
-  capabilities.updatedAt = timestamp()
-  return capabilities
-}
-
-function upgradeRegistry(profile, registry) {
-  const defaults = defaultToolRegistry(profile)
-  registry ||= defaults
-  registry.tools ||= {}
-  registry.tools = { ...Object.fromEntries(Object.entries(defaults.tools).map(([key, value]) => [key, { ...value, ...(registry.tools[key] || {}) }])), ...Object.fromEntries(Object.entries(registry.tools).filter(([key]) => !defaults.tools[key])) }
-  if (registry.tools['compatibility-layer']) {
-    registry.tools['compatibility-layer'] = { ...defaults.tools['compatibility-layer'], ...registry.tools['compatibility-layer'], capabilities: ['agent_compatibility'], type: 'internal_adapter', status: 'built-in' }
-  }
-  if (registry.tools['project-architecture-docs']) {
-    registry.tools['project-architecture-docs'] = { ...defaults.tools['project-architecture-docs'], ...registry.tools['project-architecture-docs'], capabilities: ['architecture_context'], type: 'project_context', status: defaults.tools['project-architecture-docs'].status }
-  }
-  if (registry.tools['package-scripts']) {
-    registry.tools['package-scripts'] = { ...defaults.tools['package-scripts'], ...registry.tools['package-scripts'], capabilities: ['build_validation'], type: 'project_context', status: defaults.tools['package-scripts'].status }
-  }
-  if (registry.tools.askhuman) {
-    registry.tools.askhuman = { ...defaults.tools.askhuman, ...registry.tools.askhuman, capabilities: Array.from(new Set([...(registry.tools.askhuman.capabilities || []).filter((item) => item !== 'agent_adapter'), 'human_confirmation'])), type: 'interaction_tool' }
-  }
-  registry.updatedAt = timestamp()
-  return registry
-}
-
-function writeAdapters(profile, equipment, adapterConfig, options = {}) {
-  ensureDir(cwdPath('.ai-toolops', 'adapters'))
-  const adapters = generateAdapterOutputs(profile, equipment, adapterConfig, options)
-  for (const [file, content] of Object.entries(adapters)) writeText(cwdPath('.ai-toolops', 'adapters', file), content)
-}
-
-function writePolicyOutputs(profile, equipment, registry, health, adapterConfig, pluginRegistry) {
-  const outputs = generatePolicyOutputs(profile, equipment, registry, health, adapterConfig, pluginRegistry)
-  ensureDir(cwdPath('.ai-toolops', 'generated'))
-  ensureDir(cwdPath('.ai-toolops', 'generated', 'rules'))
-  writeText(cwdPath('.ai-toolops', 'effective-policy.md'), outputs.effectivePolicy)
-  writeText(cwdPath('.ai-toolops', 'generated', 'AGENTS.toolops.md'), outputs.agentRules)
-  writeText(cwdPath('.ai-toolops', 'generated', 'CODEX.toolops.md'), outputs.codexRules)
-  writeText(cwdPath('.ai-toolops', 'generated', 'CLAUDE.toolops.md'), outputs.claudeRules)
-  writeText(cwdPath('.ai-toolops', 'generated', 'ROO.toolops.md'), outputs.rooRules)
-  for (const [file, content] of Object.entries(outputs.ruleFiles || {})) {
-    writeText(cwdPath('.ai-toolops', 'generated', 'rules', file), content)
-  }
-}
-
-function refreshDerived(profile, equipment, registry, adapterConfig = null, options = {}) {
-  const adapters = normalizeAdapters(adapterConfig || readJson(cwdPath('.ai-toolops', 'adapters.json')) || defaultAdapters())
-  const pluginRegistry = options.pluginRegistry || scanAndWriteRegistry()
-  mergePluginTools(registry, pluginRegistry)
-  writeJson(cwdPath('.ai-toolops', 'tool-registry.json'), registry)
-  writeJson(cwdPath('.ai-toolops', 'adapters.json'), adapters)
-  const report = runDoctor(profile, equipment, registry, pluginRegistry)
-  writeJson(cwdPath('.ai-toolops', 'health-report.json'), report)
-  writeAdapters(profile, equipment, adapters, options)
-  writePolicyOutputs(profile, equipment, registry, report, adapters, pluginRegistry)
-  generateUi()
-  return report
-}
-
-function mergePluginTools(registry, pluginRegistry) {
-  registry.tools ||= {}
-  for (const [name, pluginTool] of Object.entries(pluginRegistry?.tools || {})) {
-    const existing = registry.tools[name] || {}
-    registry.tools[name] = {
-      ...pluginTool,
-      ...existing,
-      name,
-      capabilities: Array.from(new Set([...(pluginTool.capabilities || []), ...(existing.capabilities || [])])),
-      _manifest: pluginTool._manifest
-    }
-  }
-  registry.updatedAt = timestamp()
-  return registry
-}
-
-function refreshCurrentProject(options = {}) {
-  const profile = scanProject()
-  writeJson(cwdPath('.ai-toolops', 'project.profile.json'), profile)
-  writeJson(cwdPath('.ai-toolops', 'project-dna.json'), buildProjectDna(profile))
-  const equipment = normalizeEquipment(readJson(cwdPath('.ai-toolops', 'equipment.json')) || buildEquipment(profile))
-  const registry = upgradeRegistry(profile, readJson(cwdPath('.ai-toolops', 'tool-registry.json')) || defaultToolRegistry(profile))
-  const adapters = normalizeAdapters(readJson(cwdPath('.ai-toolops', 'adapters.json')) || defaultAdapters())
-  const report = refreshDerived(profile, equipment, registry, adapters, options)
-  return { profile, equipment, registry, adapters, report }
-}
-
-
-function setup(flags = new Map()) {
-  const hasEquipment = Boolean(readJson(cwdPath('.ai-toolops', 'equipment.json')))
-  if (!hasEquipment) {
-    init(new Map([...flags, ['yes', true]]))
-  } else {
-    const snapshot = createSnapshot(['.ai-toolops', 'AGENTS.md', 'CLAUDE.md'])
-    const profile = scanProject()
-    const projectDna = buildProjectDna(profile)
-    const equipment = normalizeEquipment(readJson(cwdPath('.ai-toolops', 'equipment.json')) || buildEquipment(profile))
-    const registry = upgradeRegistry(profile, readJson(cwdPath('.ai-toolops', 'tool-registry.json')) || defaultToolRegistry(profile))
-    const capabilities = upgradeCapabilities(readJson(cwdPath('.ai-toolops', 'capabilities.json')) || defaultCapabilities())
-    const adapters = normalizeAdapters(readJson(cwdPath('.ai-toolops', 'adapters.json')) || defaultAdapters())
-
-    writeJson(cwdPath('.ai-toolops', 'project.profile.json'), profile)
-    writeJson(cwdPath('.ai-toolops', 'project-dna.json'), projectDna)
-    writeJson(cwdPath('.ai-toolops', 'equipment.json'), equipment)
-    writeJson(cwdPath('.ai-toolops', 'tool-registry.json'), registry)
-    writeJson(cwdPath('.ai-toolops', 'capabilities.json'), capabilities)
-    writeJson(cwdPath('.ai-toolops', 'adapters.json'), adapters)
-    refreshDerived(profile, equipment, registry, adapters)
-    writeJson(cwdPath('.ai-toolops', 'history', `${safeTimestamp()}.json`), { action: 'setup', snapshot })
-  }
-
-  syncAgentsMarkdown()
-  const profile = readJson(cwdPath('.ai-toolops', 'project.profile.json')) || scanProject()
-  const report = readJson(cwdPath('.ai-toolops', 'health-report.json'), { summary: {} })
-  console.log(JSON.stringify({
-    ok: true,
-    action: hasEquipment ? 'upgrade-existing-project' : 'init-new-project',
-    project: profile.name || path.basename(process.cwd()),
-    generated: [
-      '.ai-toolops/effective-policy.md',
-      '.ai-toolops/generated/AGENTS.toolops.md',
-      '.ai-toolops/generated/rules/index.md',
-      '.ai-toolops/ui/index.html',
-      'AGENTS.md managed block'
-    ],
-    warnings: report.summary?.warnings || 0,
-    errors: report.summary?.errors || 0,
-    next: flags.get('ui') ? 'UI server starting...' : '运行 ai-toolops ui 查看装备栏'
-  }, null, 2))
-
-  if (flags.get('ui') === true || flags.get('ui') === 'true') {
-    ui(flags)
-  }
-}
-
-function scan() {
-  const profile = scanProject()
-  console.log(JSON.stringify(profile, null, 2))
-}
-
-function init(flags) {
-  const yes = flags.get('yes') === true || flags.get('y') === true
-  if (!yes) {
-    console.log('将生成 .ai-toolops 配置目录，不修改业务代码。使用 --yes 确认执行。')
-    return
-  }
-  const snapshot = createSnapshot(['.ai-toolops', 'AGENTS.md', 'CLAUDE.md'])
-  const profile = scanProject()
-  const projectDna = buildProjectDna(profile)
-  const capabilities = defaultCapabilities()
-  const registry = defaultToolRegistry(profile)
-  const equipment = normalizeEquipment(buildEquipment(profile))
-  const adapters = defaultAdapters()
-
-  ensureDir(cwdPath('.ai-toolops', 'adapters'))
-  writeJson(cwdPath('.ai-toolops', 'project.profile.json'), profile)
-  writeJson(cwdPath('.ai-toolops', 'project-dna.json'), projectDna)
-  writeJson(cwdPath('.ai-toolops', 'capabilities.json'), capabilities)
-  writeJson(cwdPath('.ai-toolops', 'tool-registry.json'), registry)
-  writeJson(cwdPath('.ai-toolops', 'equipment.json'), equipment)
-  writeJson(cwdPath('.ai-toolops', 'adapters.json'), adapters)
-  refreshDerived(profile, equipment, registry, adapters)
-  writeJson(cwdPath('.ai-toolops', 'history', `${safeTimestamp()}.json`), { action: 'init', snapshot })
-  console.log(`初始化完成：.ai-toolops/\n备份目录：${snapshot}\n运行 ai-toolops doctor 查看状态，运行 ai-toolops ui 查看装备栏。`)
-}
-
-function doctor(flags = new Map()) {
-  const profile = scanProject()
-  const equipment = normalizeEquipment(readJson(cwdPath('.ai-toolops', 'equipment.json')) || buildEquipment(profile))
-  const registry = upgradeRegistry(profile, readJson(cwdPath('.ai-toolops', 'tool-registry.json')) || defaultToolRegistry(profile))
-  const capabilities = upgradeCapabilities(readJson(cwdPath('.ai-toolops', 'capabilities.json')) || defaultCapabilities())
-  writeJson(cwdPath('.ai-toolops', 'equipment.json'), equipment)
-  writeJson(cwdPath('.ai-toolops', 'project.profile.json'), profile)
-  writeJson(cwdPath('.ai-toolops', 'project-dna.json'), buildProjectDna(profile))
-  writeJson(cwdPath('.ai-toolops', 'tool-registry.json'), registry)
-  writeJson(cwdPath('.ai-toolops', 'capabilities.json'), capabilities)
-  const adapterConfig = normalizeAdapters(readJson(cwdPath('.ai-toolops', 'adapters.json')) || defaultAdapters())
-  const report = refreshDerived(profile, equipment, registry, adapterConfig, { agent: flags.get('agent') || 'all' })
-  console.log(JSON.stringify(report, null, 2))
-}
-
-function ui(flags) {
-  refreshCurrentProject()
-  const outDir = cwdPath('.ai-toolops', 'ui')
-  const port = Number(flags.get('port') || 4177)
-  serveStatic(path.resolve(outDir), port, {
-    onConfigChanged: () => refreshCurrentProject().report,
-    onPluginScan: () => {
-      const pluginRegistry = scanAndWriteRegistry()
-      refreshCurrentProject({ pluginRegistry })
-      return { tools: Object.keys(pluginRegistry.tools || {}).length, skills: Object.keys(pluginRegistry.skills || {}).length }
-    },
-    onSkillToggle: ({ skill, enabled }) => {
-      const result = setSkillEnabled(skill, enabled)
-      refreshCurrentProject({ pluginRegistry: result.registry })
-      return { skill, enabled: result.skill.enabled !== false }
-    },
-    onSkillUse: ({ skill }) => {
-      const result = recordSkillUsage(skill)
-      refreshCurrentProject({ pluginRegistry: result.registry })
-      return { skill, usageCount: result.skill.usageCount, lastUsedAt: result.skill.lastUsedAt }
-    }
-  })
-}
-
-function rollback() {
-  const result = rollbackLatest()
-  console.log(result.message)
-}
-
-function equip(slotKey, toolName) {
-  if (!slotKey || !toolName) throw new Error('用法：ai-toolops equip <slot> <tool>')
-  const rawEquipment = readJson(cwdPath('.ai-toolops', 'equipment.json'))
-  const equipment = rawEquipment ? normalizeEquipment(rawEquipment) : null
-  const registry = upgradeRegistry(readJson(cwdPath('.ai-toolops', 'project.profile.json')) || scanProject(), readJson(cwdPath('.ai-toolops', 'tool-registry.json')))
-  if (!equipment || !registry) throw new Error('未初始化，请先运行 ai-toolops init --yes')
-  if (!equipment.slots[slotKey]) throw new Error(`未知槽位：${slotKey}`)
-  const tool = registry.tools?.[toolName]
-  if (!tool) throw new Error(`未知工具：${toolName}。请先在 .ai-toolops/tool-registry.json 注册。`)
-  if (!tool.capabilities?.includes(slotKey)) {
-    throw new Error(`工具 ${toolName} 不声明支持槽位 ${slotKey}，请确认 tool-registry.json。`)
-  }
-  normalizeEquipment(equipment)
-  promoteTool(equipment.slots[slotKey], toolName)
-  equipment.slots[slotKey].health = tool.status === 'missing' ? 'missing' : 'ok'
-  writeJson(cwdPath('.ai-toolops', 'equipment.json'), equipment)
-  const profile = readJson(cwdPath('.ai-toolops', 'project.profile.json')) || scanProject()
-  refreshDerived(profile, equipment, registry)
-  console.log(`已装备：${slotKey} -> ${toolName}`)
-}
-
-function unequip(slotKey) {
-  if (!slotKey) throw new Error('用法：ai-toolops unequip <slot>')
-  const rawEquipment = readJson(cwdPath('.ai-toolops', 'equipment.json'))
-  if (!rawEquipment) throw new Error('未初始化，请先运行 ai-toolops init --yes')
-  const equipment = normalizeEquipment(rawEquipment)
-  if (!equipment.slots[slotKey]) throw new Error(`未知槽位：${slotKey}`)
-  normalizeEquipment(equipment)
-  setSlotTools(equipment.slots[slotKey], [])
-  equipment.slots[slotKey].health = 'empty'
-  writeJson(cwdPath('.ai-toolops', 'equipment.json'), equipment)
-  const profile = readJson(cwdPath('.ai-toolops', 'project.profile.json')) || scanProject()
-  const registry = upgradeRegistry(profile, readJson(cwdPath('.ai-toolops', 'tool-registry.json')) || defaultToolRegistry(profile))
-  refreshDerived(profile, equipment, registry)
-  console.log(`已卸下槽位：${slotKey}`)
-}
-
-
-function toggle(slotKey, value) {
-  if (!slotKey || !['on', 'off', 'true', 'false', '1', '0'].includes(String(value))) {
-    throw new Error('用法：ai-toolops toggle <slot> on|off')
-  }
-  const rawEquipment = readJson(cwdPath('.ai-toolops', 'equipment.json'))
-  if (!rawEquipment) throw new Error('未初始化，请先运行 ai-toolops init --yes')
-  const equipment = normalizeEquipment(rawEquipment)
-  if (!equipment.slots[slotKey]) throw new Error(`未知槽位：${slotKey}`)
-  const enabled = ['on', 'true', '1'].includes(String(value))
-  equipment.slots[slotKey].enabled = enabled
-  equipment.slots[slotKey].updatedAt = timestamp()
-  writeJson(cwdPath('.ai-toolops', 'equipment.json'), equipment)
-  const profile = readJson(cwdPath('.ai-toolops', 'project.profile.json')) || scanProject()
-  const registry = upgradeRegistry(profile, readJson(cwdPath('.ai-toolops', 'tool-registry.json')) || defaultToolRegistry(profile))
-  refreshDerived(profile, equipment, registry)
-  console.log(`${enabled ? '已启用' : '已禁用'}：${slotKey}`)
-}
-
-function reorderTools(slotKey, tools) {
-  if (!slotKey || !tools?.length) throw new Error('用法：ai-toolops reorder-tools <slot> <tool...>')
-  const rawEquipment = readJson(cwdPath('.ai-toolops', 'equipment.json'))
-  if (!rawEquipment) throw new Error('未初始化，请先运行 ai-toolops init --yes')
-  const equipment = normalizeEquipment(rawEquipment)
-  if (!equipment.slots[slotKey]) throw new Error(`未知槽位：${slotKey}`)
-  const existing = getSlotTools(equipment.slots[slotKey])
-  const unknown = tools.filter((tool) => !existing.includes(tool))
-  if (unknown.length) throw new Error(`槽位 ${slotKey} 不包含这些工具：${unknown.join(', ')}`)
-  reorderSlotTools(equipment.slots[slotKey], tools)
-  writeJson(cwdPath('.ai-toolops', 'equipment.json'), equipment)
-  const profile = readJson(cwdPath('.ai-toolops', 'project.profile.json')) || scanProject()
-  const registry = upgradeRegistry(profile, readJson(cwdPath('.ai-toolops', 'tool-registry.json')) || defaultToolRegistry(profile))
-  refreshDerived(profile, equipment, registry)
-  console.log(`已排序：${slotKey} -> ${getSlotTools(equipment.slots[slotKey]).join(' > ')}`)
-}
-
-
-function createSlot(slotKey, flags) {
-  if (!slotKey) throw new Error('用法：ai-toolops create-slot <slot> --label 名称 [--default-tool 工具] [--slot-type 类型] [--workflow-stage 阶段]')
-  if (!/^[a-z][a-z0-9_\-]*$/.test(slotKey)) throw new Error('slot 只能使用小写字母、数字、下划线或中划线，并以字母开头')
-  const rawEquipment = readJson(cwdPath('.ai-toolops', 'equipment.json'))
-  const rawCapabilities = readJson(cwdPath('.ai-toolops', 'capabilities.json'))
-  if (!rawEquipment || !rawCapabilities) throw new Error('未初始化，请先运行 ai-toolops init --yes')
-  const equipment = normalizeEquipment(rawEquipment)
-  equipment.slots ||= {}
-  rawCapabilities.capabilities ||= {}
-  if (equipment.slots[slotKey]) throw new Error(`槽位已存在：${slotKey}`)
-  const label = flags.get('label') || slotKey
-  const defaultTool = flags.get('default-tool') || ''
-  const fallback = String(flags.get('fallback') || '').split(',').map((item) => item.trim()).filter(Boolean)
-  const loadLevel = flags.get('load-level') || 'L1'
-  const autoLoad = flags.get('auto-load') || 'on_demand'
-  const slotType = flags.get('slot-type') || 'exclusive_priority'
-  if (!SLOT_TYPES.has(slotType)) throw new Error(`未知槽位类型：${slotType}。可选：${Array.from(SLOT_TYPES).join(', ')}`)
-  const requestedStage = flags.get('workflow-stage')
-  if (requestedStage && !WORKFLOW_STAGE_KEYS.has(requestedStage)) throw new Error(`非法 workflow stage：${requestedStage}。允许值：${Array.from(WORKFLOW_STAGE_KEYS).join(', ')}`)
-  const workflowStage = normalizeWorkflowStage(requestedStage, slotKey)
-  const relationGroup = flags.get('relation-group') || ''
-  const category = flags.get('category') || (slotType === 'project_context' ? 'project_builtin' : slotType === 'internal_adapter' ? 'agent_adapter' : 'external_tool')
-  equipment.slots[slotKey] = {
-    label,
-    tools: [],
-    active: null,
-    fallback,
-    loadLevel,
-    autoLoad,
-    enabled: true,
-    health: 'empty',
-    recommendedTool: defaultTool,
-    slotType,
-    workflowStage,
-    relationGroup,
-    category,
-    updatedAt: timestamp()
-  }
-  rawCapabilities.capabilities[slotKey] = {
-    label,
-    contract: ['由用户新增，需在后续版本补充能力契约。'],
-    slotType,
-    workflowStage,
-    relationGroup,
-    category,
-    loadLevel,
-    defaultTool,
-    fallback
-  }
-  equipment.updatedAt = timestamp()
-  rawCapabilities.updatedAt = timestamp()
-  writeJson(cwdPath('.ai-toolops', 'equipment.json'), equipment)
-  writeJson(cwdPath('.ai-toolops', 'capabilities.json'), rawCapabilities)
-  const profile = readJson(cwdPath('.ai-toolops', 'project.profile.json')) || scanProject()
-  const registry = upgradeRegistry(profile, readJson(cwdPath('.ai-toolops', 'tool-registry.json')) || defaultToolRegistry(profile))
-  refreshDerived(profile, equipment, registry)
-  console.log(`已创建槽位：${slotKey}（${label}），类型：${slotType}，流程阶段：${workflowStageLabel(workflowStage)}，默认工具：${defaultTool || '无'}。`)
-}
-
-function registerTool(slotKey, toolName, flags) {
-  if (!slotKey || !toolName) throw new Error('用法：ai-toolops register-tool <slot> <tool> [--label 名称]')
-  const profile = readJson(cwdPath('.ai-toolops', 'project.profile.json')) || scanProject()
-  const equipment = normalizeEquipment(readJson(cwdPath('.ai-toolops', 'equipment.json')))
-  const registry = upgradeRegistry(profile, readJson(cwdPath('.ai-toolops', 'tool-registry.json')))
-  if (!equipment || !registry) throw new Error('未初始化，请先运行 ai-toolops init --yes')
-  if (!equipment.slots[slotKey]) throw new Error(`未知槽位：${slotKey}`)
-  registry.tools ||= {}
-  const slot = equipment.slots[slotKey]
-  registry.tools[toolName] = {
-    ...(registry.tools[toolName] || {}),
-    label: flags.get('label') || registry.tools[toolName]?.label || toolName,
-    status: flags.get('status') || registry.tools[toolName]?.status || 'configured',
-    type: flags.get('type') || registry.tools[toolName]?.type || slot.category || 'external_tool',
-    capabilities: Array.from(new Set([...(registry.tools[toolName]?.capabilities || []), slotKey])),
-    installScope: flags.get('install-scope') || registry.tools[toolName]?.installScope || 'local-or-agent-env',
-    localFirst: true,
-    cloudUpload: false,
-    autoUpdate: false,
-    autoBackgroundScan: false,
-    detection: {
-      commands: String(flags.get('command') || '').split(',').map((item) => item.trim()).filter(Boolean),
-      files: String(flags.get('file') || '').split(',').map((item) => item.trim()).filter(Boolean)
-    },
-    installHint: flags.get('install-hint') || registry.tools[toolName]?.installHint || '请按官方方式完成安装后再接入 AI ToolOps。',
-    uninstall: registry.tools[toolName]?.uninstall || '从对应本地环境或 Agent 配置中移除，并运行 ai-toolops unequip 清空槽位。'
-  }
-  registry.updatedAt = timestamp()
-  writeJson(cwdPath('.ai-toolops', 'tool-registry.json'), registry)
-  writeJson(cwdPath('.ai-toolops', 'equipment.json'), equipment)
-  refreshDerived(profile, equipment, registry)
-  console.log(`已注册工具：${toolName} -> ${slotKey}`)
-}
-
-
-function generateAgentRules(flags = new Map()) {
-  const profile = readJson(cwdPath('.ai-toolops', 'project.profile.json')) || scanProject()
-  const equipment = normalizeEquipment(readJson(cwdPath('.ai-toolops', 'equipment.json')) || buildEquipment(profile))
-  const registry = upgradeRegistry(profile, readJson(cwdPath('.ai-toolops', 'tool-registry.json')) || defaultToolRegistry(profile))
-  if (!readJson(cwdPath('.ai-toolops', 'equipment.json'))) throw new Error('未初始化，请先运行 ai-toolops init --yes')
-  const adapters = normalizeAdapters(readJson(cwdPath('.ai-toolops', 'adapters.json')) || defaultAdapters())
-  writeJson(cwdPath('.ai-toolops', 'equipment.json'), equipment)
-  writeJson(cwdPath('.ai-toolops', 'tool-registry.json'), registry)
-  writeJson(cwdPath('.ai-toolops', 'adapters.json'), adapters)
-  const report = refreshDerived(profile, equipment, registry, adapters, { agent: flags.get('agent') || 'all' })
-  if (flags.get('apply') === true || flags.get('apply') === 'true') {
-    syncAgentsMarkdown()
-  }
-  console.log(JSON.stringify({
-    ok: true,
-    project: profile.name,
-    generated: [
-      '.ai-toolops/effective-policy.md',
-      '.ai-toolops/generated/AGENTS.toolops.md',
-      '.ai-toolops/generated/CODEX.toolops.md',
-      '.ai-toolops/generated/CLAUDE.toolops.md',
-      '.ai-toolops/generated/ROO.toolops.md',
-      '.ai-toolops/generated/rules/index.md',
-      '.ai-toolops/generated/rules/project-retrieval.md',
-      '.ai-toolops/generated/rules/feedback.md',
-      '.ai-toolops/adapters.json',
-      '.ai-toolops/adapters/index.md'
-    ],
-    targetAgent: flags.get('agent') || 'all',
-    syncedAgentsMd: Boolean(flags.get('apply') === true || flags.get('apply') === 'true'),
-    warnings: report.summary?.warnings || 0,
-    errors: report.summary?.errors || 0
-  }, null, 2))
-}
-
-
-function adaptersCommand(action = 'list', adapterId = '') {
-  const configPath = cwdPath('.ai-toolops', 'adapters.json')
-  let config = normalizeAdapters(readJson(configPath) || defaultAdapters())
-  if (action === 'list' || !action) {
-    writeJson(configPath, config)
-    console.log(JSON.stringify({
-      ok: true,
-      adapters: Object.values(config.adapters || {}).map((adapter) => ({
-        id: adapter.id,
-        label: adapter.label,
-        enabled: adapter.enabled !== false,
-        tool: adapter.tool,
-        generatedFile: adapter.generatedFile,
-        entryFiles: adapter.entryFiles,
-        managedBlock: adapter.managedBlock
-      }))
-    }, null, 2))
-    return
-  }
-  if (!adapterId) throw new Error('用法：ai-toolops adapters list|enable|disable <adapter>')
-  if (action === 'enable' || action === 'disable') {
-    config = setAdapterEnabled(config, adapterId, action === 'enable')
-    writeJson(configPath, config)
-    const profile = readJson(cwdPath('.ai-toolops', 'project.profile.json')) || scanProject()
-    const equipment = normalizeEquipment(readJson(cwdPath('.ai-toolops', 'equipment.json')) || buildEquipment(profile))
-    const registry = upgradeRegistry(profile, readJson(cwdPath('.ai-toolops', 'tool-registry.json')) || defaultToolRegistry(profile))
-    refreshDerived(profile, equipment, registry, config, { agent: 'all' })
-    console.log(`${action === 'enable' ? '已启用' : '已禁用'}适配器：${adapterId}`)
-    return
-  }
-  throw new Error('用法：ai-toolops adapters list|enable|disable <adapter>')
-}
-
-function syncAgentsMarkdown() {
-  const file = cwdPath('AGENTS.md')
-  const start = '<!-- AI ToolOps:begin -->'
-  const end = '<!-- AI ToolOps:end -->'
-  const block = `${start}\n${renderAgentRulesInclude().trim()}\n${end}`
-  const current = readText(file, '')
-  const pattern = new RegExp(`${escapeRegExp(start)}[\\s\\S]*?${escapeRegExp(end)}`)
-  const next = pattern.test(current)
-    ? current.replace(pattern, block)
-    : `${current.trim() ? `${current.trim()}\n\n` : ''}${block}\n`
-  writeText(file, next.endsWith('\n') ? next : `${next}\n`)
-}
-
-function escapeRegExp(value) {
-  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
-function pluginCommand(action = 'scan', args = [], flags = new Map()) {
-  if (action === 'scan' || !action) {
-    const registry = scanAndWriteRegistry()
-    refreshCurrentProject({ pluginRegistry: registry })
-    console.log(JSON.stringify({
-      ok: true,
-      tools: Object.keys(registry.tools || {}).length,
-      skills: Object.keys(registry.skills || {}).length,
-      toolNames: Object.keys(registry.tools || {}),
-      skillNames: Object.keys(registry.skills || {})
-    }, null, 2))
-    return
-  }
-  if (action === 'list') {
-    const registry = readPluginRegistry()
-    console.log(JSON.stringify({
-      ok: true,
-      tools: registry.tools || {},
-      skills: registry.skills || {}
-    }, null, 2))
-    return
-  }
-  throw new Error('用法：ai-toolops plugin scan|list')
-}
-
-function skillCommand(action = 'list', skillName = '', flags = new Map()) {
-  if (action === 'scan') {
-    const registry = scanAndWriteRegistry()
-    refreshCurrentProject({ pluginRegistry: registry })
-    console.log(JSON.stringify({ ok: true, skills: Object.keys(registry.skills || {}).length, skillNames: Object.keys(registry.skills || {}) }, null, 2))
-    return
-  }
-
-  const registry = readPluginRegistry()
-  const skills = registry.skills || {}
-
-  if (action === 'list' || !action) {
-    console.log(JSON.stringify({
-      ok: true,
-      skills: Object.entries(skills).map(([name, skill]) => ({
-        name,
-        label: skill.label || name,
-        description: skill.description || '',
-        descriptionZh: skill.descriptionZh || '',
-        enabled: skill.enabled !== false,
-        scope: skill.scope || skill.source?.scope || '',
-        agent: skill.agent || skill.source?.agent || '',
-        promptFile: skill.promptFile || '',
-        workflowStage: skill.workflowStage || '',
-        requiredTools: skill.requiredTools || [],
-        category: skill.category || '',
-        categoryLabel: skill.categoryLabel || '',
-        tags: skill.tags || [],
-        usageCount: skill.usageCount || 0,
-        lastUsedAt: skill.lastUsedAt || ''
-      }))
-    }, null, 2))
-    return
-  }
-
-  if (!skillName) throw new Error('用法：ai-toolops skill list|enable|disable|use <name>')
-
-  if (action === 'enable' || action === 'disable') {
-    const result = setSkillEnabled(skillName, action === 'enable')
-    refreshCurrentProject({ pluginRegistry: result.registry })
-    console.log(JSON.stringify({ ok: true, action, skill: skillName, enabled: result.skill.enabled !== false }))
-    return
-  }
-
-  if (action === 'use') {
-    const result = recordSkillUsage(skillName)
-    refreshCurrentProject({ pluginRegistry: result.registry })
-    console.log(JSON.stringify({ ok: true, action, skill: skillName, usageCount: result.skill.usageCount, lastUsedAt: result.skill.lastUsedAt }))
-    return
-  }
-
-  throw new Error('用法：ai-toolops skill list|enable|disable|use <name>')
-}
-

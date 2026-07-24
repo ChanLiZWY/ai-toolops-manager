@@ -1,119 +1,24 @@
-# CHANGELOG
+# Changelog
 
-## Unreleased
+## 1.0.0 - 2026-07-24
 
-- 修复 Plugin/Skill 扫描器错误使用异步 `readFile` 导致扫描结果永远为空。
-- 新增 `ai-toolops skill scan`，自动发现项目级、用户级和 Codex 插件缓存中的标准 `SKILL.md`。
-- 新增 `.ai-toolops/skills.json`，Skill 启用/禁用可持久化，并同步刷新 Doctor、有效策略、Adapter 与 UI。
-- 补齐 UI `/api/plugin-scan`、`/api/skill-toggle`，配置开关和排序后不再遗留过期派生规则。
-- 修复插件 manifest 名称错位、禁用 Adapter 遗留旧文件、未验证工具冒充已安装、UI HTML 转义与白天主题问题。
-- Doctor 新增 Agent MCP 配置发现，可识别 Codex TOML 与 Claude/Roo/VS Code/Cursor 常见 JSON 配置中的已连接服务。
-- 新增 Node 内置回归测试，覆盖扫描、启停、目标项目 setup、策略、Adapter、Doctor 与 UI API。
+- 产品范围收敛为 Windows 10/11 x64 普通用户安装。
+- 项目状态改为 `.ai-toolops/policy.yaml` 与 `.ai-toolops/toolops.lock.json`。
+- 电脑库存、托管工具、回执、迁移和 Agent 绑定状态改存 `%LOCALAPPDATA%\ai-toolops`。
+- 新增统一 `context`、只读 `doctor`、可信 Agent 自动检测和 generic 安全回退。
+- 新增 ActionPlan、dry-run、确认、事务锁、回执、回滚和失败恢复。
+- 新增 Windows x64 `rg` 内置 Provider，支持检测、安装、更新、卸载和修复。
+- 新增 `bootstrap --locked`、旧项目迁移预检、正式迁移及迁移回滚。
+- 真实项目迁移会丢弃项目文档、package scripts 和旧 Agent Adapter 等非工具槽位；兼容 Codex 中的 `codebase_memory` MCP 名称。
+- Agent Adapter 与 Tool Provider 分离；Codex、Claude、Roo 绑定互不污染。
+- 新增 Node SEA 独立 `ai-toolops.exe`、用户级安装/卸载和安全自更新流程。
+- 重做本地 Web UI；五个页面使用真实应用服务并要求计划确认。
+- 本地 UI 新增 Windows 目录选择、项目路径输入和最多 8 个最近项目，开始菜单入口可直接切换跨项目上下文。
+- 优化本地 UI 的窗口化视觉：深色工具侧栏、统一 SVG 图标、紧凑项目入口、稳定内容宽度和 375px 响应式布局。
+- 便携版 `ai-toolops.exe` 无参数启动时直接打开本地 UI；命令帮助改为显式使用 `--help`。
+- 新增自包含 `ai-toolops-setup.exe`：当前用户安装、PATH、开始菜单、可选桌面快捷方式、Windows 卸载项、覆盖升级和失败恢复。
+- 删除装备卡片、Skill 次数、插件扫描、规则 Markdown 生成、伪安装 UI 和其他重复状态。
 
-## v0.2.0
+## 0.x
 
-本版本新增 Plugin / Skill 系统，v0.1.x 的更新历史移至 CHANGELOG 独立管理。
-
-- 新增 `plugins/tools/`、`plugins/skills/` 插件目录结构。
-- 新增 `ai-toolops plugin scan|list`：扫描或列出插件（tools + skills）。
-- 新增 `ai-toolops skill list|enable|disable <name>`：管理 Skill 启停（enable/disable 当前为占位逻辑）。
-- 更新 README：历史更新记录移至 `docs/CHANGELOG.md`；READme 聚焦使用方法和功能介绍。
-- 版本号升至 0.2.0。
-
-## v0.1.14
-
-本版本聚焦"agent_compatibility 真正封装成适配器层"。
-
-- 新增 `.ai-toolops/adapters.json`，统一管理 Codex / Claude Code / Roo Code 适配目标。
-- `agent_compatibility` 不再只是展示卡片，而是驱动规则生成的内部适配层。
-- 默认适配器工具拆为 `codex-adapter`、`claude-adapter`、`roo-adapter`，均属于 `internal_adapter`。
-- 新增命令：`ai-toolops adapters list|enable|disable <id>`。
-- `sync-agent-rules --agent codex|claude|roo|all` 支持按目标刷新适配输出。
-- `.ai-toolops/effective-policy.md` 增加 Agent 兼容层说明，明确适配器不是规则源，只是翻译器。
-- UI 数据新增 adapters 快照，装备页可展示当前启用 / 关闭的适配目标。
-- Doctor 增强对 `agent_compatibility` 的类型检查，避免被误配置成普通工具槽位。
-
-## v0.1.13
-
-本版本继续修复 Windows 本地安装脚本。
-
-- 修复 `spawnSync npm.cmd EINVAL`：Windows 下不再直接 `spawn npm.cmd`，改为通过 `cmd.exe /d /s /c "npm link"` 执行。
-- 保留 setup 阶段的 shell-free 执行方式，继续避免 `C:\Program Files\nodejs\node.exe` 被拆成 `C:\Program`。
-- 支持工具目录、项目目录、Node 安装目录均包含空格的常见 Windows 场景。
-- 如果 npm 自身配置存在 `home` 告警，不影响安装流程。
-
-## v0.1.12
-
-本版本修复 Windows 路径包含空格时，`npm run install:local` 在第二步执行 `ai-toolops setup` 失败的问题。
-
-- `scripts/install-local.js` 不再通过 shell 拼接命令执行 Node，避免 `C:\Program Files\nodejs\node.exe` 被拆成 `C:\Program`。
-- Windows 下 `npm link` 改为直接调用 `npm.cmd`，减少路径转义问题。
-- 第二步 setup 直接通过当前 Node 进程执行工具入口，并显式传入 `--project <项目路径>`，支持工具目录和项目目录都包含空格。
-- `npm warn Unknown user config "home"` 属于用户 npm 配置告警，不影响 ToolOps 安装流程；本版本不依赖该配置。
-
-## v0.1.11
-
-本版本聚焦"UI 阅读体验 + 一步升级/项目同步"。
-
-- UI 顶部新增白天 / 夜晚模式切换，浏览器本地记忆选择。
-- Doctor 检查结果默认折叠，只显示错误、警告、提示和检查项数量，排查时再展开明细。
-- 调整整体字体、间距、卡片边框、状态颜色和浅色护眼主题，减少信息噪音，突出重点状态。
-- 新增 `ai-toolops setup`：在业务项目中一步完成初始化或升级、doctor、Agent 规则同步和 UI 数据生成。
-- `ai-toolops setup --project <项目路径>` 支持从任意目录指定业务项目。
-- 新增 `scripts/install-local.js` 和 `npm run install:local -- --project <项目路径>`：在解压后的工具目录中一步执行 `npm link` 并对目标项目运行 `ai-toolops setup`。
-- 新增 `setup:project` npm script，方便本地调试项目同步流程。
-
-## v0.1.10
-
-本版本聚焦"AGENTS.md 简洁入口 + ToolOps 规则按需加载"。
-
-- `AGENTS.md` 同步块从详细规则改为轻量入口，只要求先读 `.ai-toolops/generated/AGENTS.toolops.md`。
-- `.ai-toolops/generated/AGENTS.toolops.md` 改为规则索引，不再默认塞入全部 Semble / rg / AskHuman 细则。
-- 新增 `.ai-toolops/generated/rules/` 目录：按流程阶段生成细则文件。
-- 项目检索规则独立到 `.ai-toolops/generated/rules/project-retrieval.md`。
-- AskHuman / 反馈规则独立到 `.ai-toolops/generated/rules/feedback.md`。
-- `.ai-toolops/effective-policy.md` 保留完整有效能力矩阵，但只在需要判断启用、禁用、优先级、可用性或 fallback 时读取。
-- 适配"全局 AGENTS.md 只写通用硬规则，项目 AGENTS.md 只写路由入口，详细规则按需读取"的使用方式。
-
-## v0.1.9
-
-本版本聚焦"按 Agent 执行流程组织装备"。
-
-- 新增 `workflowStage`：能力槽位可以挂到 Agent 流程阶段，例如 `project_retrieval`、`validation`、`feedback`。
-- 新增 `relationGroup`：相似或互补能力可以归入同组，例如 `exact_search` 与 `semantic_search` 同属 `file_lookup`。
-- UI 从"类型分组"升级为"流程阶段布局"：规则入口 → 项目上下文 → 项目检索 → 验证 → 反馈。
-- `exact_search`、`semantic_search`、`code_graph` 会显示在同一"项目检索"阶段，便于按条件选择。
-- `effective-policy.md` 和 `AGENTS.toolops.md` 新增文件查找策略：目标明确直接读文件；未知入口/调用链/影响面才用 Semble；Semble 无结果再用 rg 兜底。
-- `effective-policy.md` 和 `AGENTS.toolops.md` 新增 AskHuman 使用规则：只在关键确认、风险选择或结束反馈时通过 Shell 调用 `AskHuman.exe`。
-- `create-slot` 新增 `--workflow-stage` 和 `--relation-group`，新增槽位可以直接放进流程布局。
-
-## v0.1.8
-
-本版本聚焦"让 Agent 遵守 ToolOps 配置"。
-
-- 新增 `ai-toolops generate-agent-rules [--apply]`：生成 Agent 规则与有效策略文件。
-- 新增 `ai-toolops sync-agent-rules`：生成规则，并把 ToolOps 引用块同步到项目根目录 `AGENTS.md`。
-- 新增 `.ai-toolops/effective-policy.md`：面向 Agent 的有效能力矩阵，直接说明每个槽位是否启用、当前有效工具、是否可用、fallback 和使用规则。
-- 新增 `.ai-toolops/generated/AGENTS.toolops.md`：通用 Agent 规则入口。
-- 新增 `.ai-toolops/generated/CODEX.toolops.md`、`CLAUDE.toolops.md`、`ROO.toolops.md`：面向不同 Agent 的规则文件。
-- `doctor`、`init`、`equip`、`toggle`、`reorder-tools`、`register-tool`、`create-slot` 都会刷新派生规则文件。
-- 对推荐未安装或不可用的排序第一工具，`effective-policy.md` 会明确写出"不可用，不得调用"，避免 Agent 误用。
-
-## v0.1.7
-
-- Doctor 输出新增 `slots` 摘要矩阵和 `statusCounts`，能直接区分已安装、项目内置、内置适配、推荐未安装、已配置未安装、已关闭。
-- UI 分组从三类扩展为五类：外部工具、项目内置能力、Agent 适配、人工确认、推荐未安装 / 不可用。
-- `human_confirmation` 在 UI 中独立成"人工确认"，不再被外部工具或 Agent 适配分组稀释。
-- 推荐未安装的外部工具独立展示，不再伪装成可用装备，同时保留卡片内安装接入提示词入口。
-- `create-slot` 增加 `slotType` 参数校验，避免写入非法槽位类型。
-- UI 内切换开关和拖拽排序后，会同步刷新 `.ai-toolops/ui/data.json` 中的 equipment 快照，避免刷新页面后状态回退。
-- `npm run check` 扩展检查范围，覆盖 bin、scanner、adapter 等入口。
-
-## v0.1.6
-
-- `compatibility-layer` 从旧 `agent_adapter` 拆分到 `agent_compatibility` 槽位，专门负责 Codex / Claude / Roo 等 Agent 规则兼容。
-- `AskHuman` 拆分到 `human_confirmation` 槽位，专门负责人机确认，不再与 Agent 兼容层互斥。
-- `project-architecture-docs` 与 `package-scripts` 标记为"项目内置能力"，不再伪装成外部已安装工具。
-- 新增槽位类型：`exclusive_priority`、`project_context`、`internal_adapter`、`additive`。
-- UI 按"外部工具 / 项目内置能力 / Agent 适配"分组展示，避免误解替代关系。
-- `ai-toolops doctor` 会自动迁移旧 `agent_adapter` 配置，并更新 registry/capabilities。
+0.x 是装备模型、插件扫描和规则 Markdown 生成的实验版本。其项目数据只通过 `ai-toolops migrate` 兼容，不再保留对应运行时命令。

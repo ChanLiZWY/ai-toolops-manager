@@ -1,263 +1,95 @@
-# 验证记录 v0.1.8
+# AI ToolOps Manager Windows v1 验收
 
-## 语法检查
+本文件只覆盖当前 v1 代码。历史 `equipment`、插件目录扫描、Skill 次数、规则 Markdown 生成和拖拽排序不再属于产品验收范围。
 
-```bash
+## 自动验证
+
+在 Windows 10/11 x64、Node 23 开发环境中运行：
+
+```powershell
+npm ci
 npm run check
+npm test
+npm run build:windows
+npm run smoke:windows
 ```
 
-结果：通过。
+预期：
 
-检查范围：
+- 所有语法检查和 v1 测试通过。
+- `dist\ai-toolops.exe`、`dist\ai-toolops-setup.exe` 及各自 SHA-256 文件生成。
+- 独立程序无需外部 Node 即可执行 `--version`、初始化项目、启动 UI 并读取 `/api/state`。
+- 安装器在隔离的中文/空格路径中完成安装、重复升级、快捷方式、卸载注册和完整卸载。
 
-- `bin/ai-toolops.js`
-- `src/cli.js`
-- `src/utils.js`
-- `src/scanner/projectScanner.js`
-- `src/core/rollback.js`
-- `src/core/doctor.js`
-- `src/core/equipmentModel.js`
-- `src/core/registries.js`
-- `src/adapters/agentAdapters.js`
-- `src/ui/generateUi.js`
+## 手工验收
 
-## 初始化验证
+### 用户级安装与卸载
 
-在临时 Vue / uni-app 项目中执行：
-
-```bash
-ai-toolops init --yes
-ai-toolops doctor
-ai-toolops ui
+```powershell
+.\dist\ai-toolops-setup.exe
+ai-toolops --version
 ```
 
-结果：通过。
+验收安装目录位于 `%LOCALAPPDATA%\Programs\ai-toolops`，开始菜单存在 AI ToolOps Manager，Windows“已安装的应用”存在卸载项。安装器经用户确认后加入用户 PATH；桌面快捷方式由用户选择。
 
-验证点：
+### 项目状态
 
-- 生成 `.ai-toolops` 配置目录。
-- 生成 `project.profile.json`、`project-dna.json`、`capabilities.json`、`tool-registry.json`、`equipment.json`。
-- 生成 `adapters/codex.toolops.md`、`claude.toolops.md`、`roo.toolops.md`。
-- UI 文件生成成功，`.ai-toolops/ui/app.js` 语法检查通过。
-
-## v0.1.6 结构验证
-
-验证点：
-
-- `project-architecture-docs` 被标记为 `project_context` / `project_builtin`，Doctor 显示为“项目内置”。
-- `package-scripts` 被标记为 `project_context` / `project_builtin`，Doctor 显示为“项目内置”。
-- `compatibility-layer` 被放入 `agent_compatibility` 槽位，类型为 `internal_adapter`。
-- `AskHuman` / `askhuman` 被放入 `human_confirmation` 槽位，类型为 `exclusive_priority`。
-- `AskHuman` 不再与 `compatibility-layer` 共用旧 `agent_adapter` 槽位。
-- Adapter 输出明确说明：`agent_compatibility` 负责 Agent 规则适配，`human_confirmation` 负责人工确认。
-
-## 旧配置迁移验证
-
-构造 v0.1.5 风格配置：
-
-```json
-{
-  "slots": {
-    "agent_adapter": {
-      "tools": ["askhuman", "compatibility-layer"],
-      "active": "askhuman"
-    }
-  }
-}
+```powershell
+ai-toolops init --project "C:\临时项目\带 空格"
+ai-toolops context --project "C:\临时项目\带 空格" --agent auto
+ai-toolops doctor --project "C:\临时项目\带 空格" --json
 ```
 
-执行：
+项目稳定配置只能包含 `.ai-toolops\policy.yaml` 和 `.ai-toolops\toolops.lock.json`，不得出现绝对路径、健康缓存、Windows 用户名或凭据。
 
-```bash
-ai-toolops doctor
+### 工具生命周期
+
+```powershell
+ai-toolops install rg --project . --dry-run
+ai-toolops install rg --project . --yes
+ai-toolops doctor --project .
+ai-toolops uninstall rg --project . --dry-run
 ```
 
-结果：通过。
+每次变更先返回 ActionPlan；真实执行产生电脑级 receipt。重复安装必须幂等，执行失败不得把库存标记为已安装。
 
-迁移结果：
+### 跨项目与新电脑恢复
 
-- 旧 `agent_adapter` 自动拆分为：
-  - `agent_compatibility` → `compatibility-layer`
-  - `human_confirmation` → `askhuman`
-- `tool-registry.json` 自动补齐 `askhuman -> human_confirmation` 能力声明。
-- 不再出现 `capabilityMismatch`。
+在两个项目中声明同一能力，确认第二个项目复用 `%LOCALAPPDATA%\ai-toolops` 中的托管工具。复制项目的 `policy.yaml` 与 `toolops.lock.json` 到另一台 Windows 电脑后执行：
 
-## UI 验证
-
-验证点：
-
-- 页面按“外部工具 / 项目内置能力 / Agent 适配”分组展示。
-- 外部工具显示“已安装”。
-- 项目文档和 package scripts 显示“项目内置”。
-- compatibility-layer 显示“内置适配”。
-- 互斥槽位显示“当前生效”。
-- 非互斥槽位显示“当前启用”。
-- 每行 1 / 2 / 3 / 4 张卡片切换仍可用。
-- 全局加号生成的提示词已包含 `agent_compatibility` 和 `human_confirmation` 两个不同槽位。
-
-## 非目标确认
-
-本版本仍然不做：
-
-- 真实 MCP Gateway 强制拦截。
-- 自动安装外部工具。
-- 自动修改业务代码。
-- 自动上传或云端同步。
-
-
-## v0.1.7 增量验证
-
-### Doctor 状态矩阵
-
-验证点：
-
-- `health-report.json` 增加 `slots` 数组。
-- `summary.statusCounts` 能统计 `installed`、`project_provided`、`built_in`、`recommended_not_installed` 等状态。
-- disabled 槽位仍会进入 `slots` 矩阵，但 `effective` 为 `null`。
-
-### UI 分组
-
-验证点：
-
-- UI 生成的 `app.js` 语法检查通过。
-- 装备分组包含：外部工具、项目内置能力、Agent 适配、人工确认、推荐未安装 / 不可用。
-- `human_confirmation` 进入人工确认分组。
-- `semantic_search` / `code_graph` 等未安装推荐外部工具进入推荐未安装 / 不可用分组。
-- 推荐未安装工具显示 warning 状态，不再显示为已可用。
-
-### CLI 校验
-
-验证点：
-
-- `create-slot` 对非法 `--slot-type` 抛出错误，不再静默改写。
-- `register-tool`、`equip`、`reorder-tools`、`doctor` 在新增槽位后仍可正常工作。
-
-### UI 快照同步
-
-验证点：
-
-- UI API `/api/toggle` 写入 `equipment.json` 后，会同步更新 `.ai-toolops/ui/data.json` 中的 equipment 快照。
-- UI API `/api/reorder-tools` 写入排序后，会同步更新 `.ai-toolops/ui/data.json` 中的 equipment 快照。
-
-
-## v0.1.8 增量验证
-
-### 语法检查
-
-```bash
-npm run check
+```powershell
+ai-toolops bootstrap --locked --project . --dry-run
+ai-toolops bootstrap --locked --project . --yes
 ```
 
-结果：通过。
+### Agent 隔离
 
-新增检查：
-
-- `src/core/policyGenerator.js`
-
-### Agent 规则生成
-
-在临时项目中执行：
-
-```bash
-ai-toolops init --yes
-ai-toolops doctor
-ai-toolops generate-agent-rules --apply
-ai-toolops sync-agent-rules
+```powershell
+ai-toolops agent detect --project .
+ai-toolops agent bind codex --project . --dry-run
+ai-toolops agent bind codex --project . --yes
+ai-toolops agent status codex --project .
 ```
 
-结果：通过。
+绑定记录只属于指定 Agent。未知 Agent 必须回退 generic，generic 不得继承 Codex、Claude 或 Roo 的专属 MCP。
 
-验证点：
+### 本地 UI
 
-- 生成 `.ai-toolops/effective-policy.md`。
-- 生成 `.ai-toolops/generated/AGENTS.toolops.md`。
-- 生成 `.ai-toolops/generated/CODEX.toolops.md`、`CLAUDE.toolops.md`、`ROO.toolops.md`。
-- `generate-agent-rules --apply` 会在 `AGENTS.md` 写入 `<!-- AI ToolOps:begin -->` / `<!-- AI ToolOps:end -->` 管理块。
-- `sync-agent-rules` 可重复执行，并会替换旧管理块，不会重复追加。
-- 推荐未安装的排序第一工具会在 `effective-policy.md` 中显示为“不可用，不得调用”。
-- disabled 槽位在 `effective-policy.md` 中显示为“槽位已关闭，不得使用”。
-
-### 派生文件刷新
-
-验证点：
-
-- `init` 会生成 Agent 策略文件。
-- `doctor` 会刷新 Agent 策略文件。
-- `equip`、`toggle`、`reorder-tools`、`register-tool`、`create-slot` 会刷新 Agent 策略文件。
-
-### 非目标确认
-
-本版本仍然不做：
-
-- MCP Gateway 硬拦截。
-- 自动安装外部工具。
-- 自动调用第三方 Agent 配置 API。
-- 自动上传代码或同步云端。
-
-
-## v0.1.9 验证项
-
-- `npm run check` 覆盖新增 `src/core/workflow.js`。
-- `ai-toolops init --yes` 后，默认槽位应写入 `workflowStage` 与 `relationGroup`。
-- `ai-toolops doctor` 后，`.ai-toolops/effective-policy.md` 应包含 Agent 通用执行流程、文件查找策略、AskHuman 使用规则。
-- `.ai-toolops/ui/data.json` 应包含 `workflowStages`。
-- 生成的 `.ai-toolops/ui/app.js` 应通过 `node --check`。
-- `ai-toolops create-slot <slot> --workflow-stage <阶段>` 应写入指定流程阶段。
-- 非法 `--workflow-stage` 应失败。
-
-
-## v0.1.10 验证项
-
-- `npm run check` 通过。
-- `ai-toolops init --yes` 后应生成 `.ai-toolops/generated/rules/` 目录。
-- `ai-toolops generate-agent-rules --apply` 后，`AGENTS.md` 中的 AI ToolOps 管理块应为轻量入口，不应包含完整 AskHuman / Semble 细则。
-- `.ai-toolops/generated/AGENTS.toolops.md` 应为规则索引，包含按需加载说明。
-- `.ai-toolops/generated/rules/project-retrieval.md` 应包含 Semble / rg / 直接阅读策略。
-- `.ai-toolops/generated/rules/feedback.md` 应包含 AskHuman 使用规则。
-- `.ai-toolops/effective-policy.md` 应保留完整有效能力矩阵，但注明只在需要工具决策时读取。
-
-
-## v0.1.14 验证项
-
-### 语法检查
-
-```bash
-npm run check
+```powershell
+ai-toolops ui --project .
 ```
 
-结果：通过。
+检查总览、能力、电脑库存、变更回执和设置页面。所有变更必须先展示计划再确认，按钮必须调用真实应用服务，不得用提示词或界面状态冒充安装。
 
-新增检查：
+从开始菜单启动后，使用顶部项目入口选择一个带中文和空格的已初始化项目，再切换至另一个最近项目。确认当前路径、能力和 Doctor 状态随项目切换；未初始化目录必须显示恢复说明，不能静默切换。
 
-- `src/core/adapterConfig.js`
+## 发布前实机矩阵
 
-### Adapter 封装验证
+至少记录：
 
-在临时项目中执行：
+| 环境 | 普通用户安装 | 中文/空格路径 | Defender | 文件占用恢复 | 独立程序 |
+|---|---:|---:|---:|---:|---:|
+| Windows 10 x64 | 待实机记录 | 待实机记录 | 待实机记录 | 待实机记录 | 待实机记录 |
+| Windows 11 Pro x64 build 26200（当前开发机） | 通过（当前账号） | 自动测试通过 | 待发布环境记录 | 事务测试通过，待真实外部占用记录 | 通过 |
 
-```bash
-ai-toolops setup
-ai-toolops adapters list
-ai-toolops adapters disable claude
-ai-toolops sync-agent-rules --agent codex
-```
-
-结果：通过。
-
-验证点：
-
-- 生成 `.ai-toolops/adapters.json`。
-- 生成 `.ai-toolops/adapters/index.md`。
-- `agent_compatibility` 默认装备 `codex-adapter`、`claude-adapter`、`roo-adapter`。
-- `adapters disable claude` 会更新 `.ai-toolops/adapters.json` 并刷新派生规则。
-- 被关闭的 Claude 适配文件会明确提示该适配器已关闭，不应作为当前规则入口。
-- `.ai-toolops/effective-policy.md` 包含 Agent 兼容层说明。
-- `.ai-toolops/ui/data.json` 包含 adapters 快照。
-- `.ai-toolops/ui/app.js` 语法检查通过。
-
-### 自我审核
-
-- Adapter 只负责规则翻译，不再作为第三份独立规则源。
-- 工具启用 / 禁用 / 优先级仍以 `.ai-toolops/equipment.json` 为事实源。
-- Agent 专用文件是生成产物，不应手动维护。
-- 系统级 AGENTS.md、项目级 AGENTS.md、ToolOps 生成规则保持分层，避免详细规则重复。
+未执行的实机项不得标记为通过。
