@@ -18,6 +18,7 @@ const browseProjectButton = document.getElementById('browse-project');
 let state = null;
 let currentView = 'overview';
 let currentPlanId = null;
+let currentPlanAction = null;
 
 document.getElementById('nav').addEventListener('click', function (event) {
   const button = event.target.closest('[data-view]');
@@ -47,6 +48,7 @@ applyButton.addEventListener('click', applyPlan);
 content.addEventListener('click', function (event) {
   const button = event.target.closest('[data-action]');
   if (!button) return;
+  if (button.dataset.action === 'check-release') return checkRelease(button);
   requestPlan(button.dataset.action, button.dataset.tool, button.dataset.agent);
 });
 content.addEventListener('submit', function (event) {
@@ -223,6 +225,9 @@ function renderSettings() {
       '<div class="row-actions"><button class="button ' + (bound ? 'danger' : 'secondary') + '" data-action="agent-' + (bound ? 'unbind' : 'bind') + '" data-agent="' + attr(agent.agentId) + '">' + (bound ? '解除记录' : '确认已接入') + '</button></div></div>';
   }).join('');
   content.innerHTML =
+    panel('应用更新', '仅在点击时连接 GitHub；下载前显示变更计划并校验安装包 SHA-256。',
+      '<div class="row"><div class="row-main"><strong>AI ToolOps Manager</strong><span>当前版本 ' + escapeHtml(state.app.version) + '</span></div>' +
+      '<div class="row-meta">稳定版 Release · 不后台检查</div><div class="row-actions"><button class="button secondary" data-action="check-release">检查更新</button></div></div>') +
     panel('Agent 接入', 'ToolOps 不擅自修改宿主规则。请手工添加下方一句，然后确认记录。', '<div class="code">' + escapeHtml(state.instruction) + '</div><div class="list" style="margin-top:16px">' + agentRows + '</div>') +
     panel('登记外部工具', '绝对路径只保存在本机库存，不进入项目 policy 或 lock。',
       '<form id="external-form" class="form-grid"><label>工具名称<input name="tool" required pattern="[a-zA-Z0-9_-]+"></label><label>可执行文件绝对路径<input name="path" required placeholder="C:\\\\Tools\\\\example.exe"></label><button class="button primary" type="submit">预览登记</button></form>');
@@ -240,10 +245,34 @@ async function requestPlan(action, tool, agent, extra) {
     const body = Object.assign({ action: action, tool: tool, agent: agent }, extra || {});
     const result = await api('/api/plan', { method: 'POST', body: body });
     currentPlanId = result.plan.id;
+    currentPlanAction = result.plan.action;
     planPreview.textContent = JSON.stringify(result.plan, null, 2);
     dialog.showModal();
   } catch (error) {
     notify(error.message, true);
+  }
+}
+
+async function checkRelease(button) {
+  button.disabled = true;
+  button.textContent = '正在检查…';
+  try {
+    const result = await api('/api/update/check', { method: 'POST', body: {} });
+    if (result.release.status !== 'update-available') {
+      notify(result.release.status === 'ahead-of-release'
+        ? '当前版本 ' + result.release.currentVersion + ' 高于最新稳定版 ' + result.release.latestVersion
+        : '当前已是最新版本 ' + result.release.currentVersion);
+      return;
+    }
+    currentPlanId = result.plan.id;
+    currentPlanAction = result.plan.action;
+    planPreview.textContent = JSON.stringify(result.plan, null, 2);
+    dialog.showModal();
+  } catch (error) {
+    notify(error.message, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = '检查更新';
   }
 }
 
@@ -254,9 +283,11 @@ async function applyPlan() {
   try {
     await api('/api/apply', { method: 'POST', body: { planId: currentPlanId } });
     dialog.close();
-    notify('操作完成');
+    const isReleaseUpdate = currentPlanAction === 'release-update';
+    notify(isReleaseUpdate ? '更新已安排；窗口关闭后将安装新版本，请稍后重新打开。' : '操作完成');
     currentPlanId = null;
-    await loadState();
+    currentPlanAction = null;
+    if (!isReleaseUpdate) await loadState();
   } catch (error) {
     notify(error.message, true);
   } finally {

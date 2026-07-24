@@ -1,0 +1,48 @@
+name: Windows CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 23
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+
+  distribution:
+    name: Build unsigned distribution
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 23
+          cache: npm
+      - run: npm ci
+      - run: npm run build:windows
+      - run: npm run smoke:windows
+      - name: Confirm CI artifact is explicitly unsigned
+        shell: powershell
+        run: |
+          $signature = Get-AuthenticodeSignature -LiteralPath dist\ai-toolops-setup.exe
+          if ($signature.Status -eq 'Valid') {
+            throw 'CI unexpectedly produced a signed artifact.'
+          }
+          Write-Host "Unsigned CI build status: $($signature.Status)"

@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
 import { gzipSync } from 'node:zlib'
 import { build } from 'esbuild'
+import { VERSION } from '../src/version.js'
 
 const require = createRequire(import.meta.url)
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -27,7 +28,8 @@ const appInternals = await buildSeaExecutable({
   entry: path.join(root, 'bin', 'ai-toolops.js'),
   executable: appExecutable
 })
-assertOutput(appExecutable, ['--version'], '1.0.0')
+assertOutput(appExecutable, ['--version'], VERSION)
+signIfConfigured(appExecutable)
 const appChecksum = writeChecksum(appExecutable)
 
 const compressedPayload = path.join(dist, 'ai-toolops.exe.gz')
@@ -48,6 +50,7 @@ const setupInternals = await buildSeaExecutable({
   }
 })
 assertOutput(setupExecutable, ['--help'], 'AI ToolOps Setup')
+signIfConfigured(setupExecutable)
 const setupChecksum = writeChecksum(setupExecutable)
 
 for (const file of [...appInternals, ...setupInternals, compressedPayload]) {
@@ -113,6 +116,21 @@ function writeChecksum(executable) {
   const checksum = crypto.createHash('sha256').update(fs.readFileSync(executable)).digest('hex')
   fs.writeFileSync(`${executable}.sha256`, `${checksum}  ${path.basename(executable)}\n`)
   return checksum
+}
+
+function signIfConfigured(executable) {
+  const certificate = process.env.AI_TOOLOPS_SIGN_CERTIFICATE
+  const password = process.env.AI_TOOLOPS_SIGN_PASSWORD
+  if (!certificate && !password) {
+    console.warn(`UNSIGNED BUILD: ${path.basename(executable)} (signing secrets not configured)`)
+    return
+  }
+  if (!certificate || !password) throw new Error('Both AI_TOOLOPS_SIGN_CERTIFICATE and AI_TOOLOPS_SIGN_PASSWORD are required.')
+  run('powershell.exe', [
+    '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+    '-File', path.join(root, 'scripts', 'sign-windows.ps1'),
+    '-File', executable
+  ])
 }
 
 function run(command, args) {

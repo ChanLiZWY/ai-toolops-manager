@@ -10,9 +10,38 @@ import { readReceipts } from '../transaction.js'
 import { applyLifecycle, planLifecycle } from '../lifecycle.js'
 import { agentStatus, applyAgentBinding, bindingInstruction, planAgentBinding } from '../agent-adapters.js'
 import { projectListView, rememberUiProject, validateUiProject } from './projects.js'
+import { clearUiSession, openBrowser, reuseUiSession, writeUiSession } from './session.js'
+import { applyReleaseUpdate, checkLatestRelease, planReleaseUpdate } from '../release-update.js'
 import { UI_HTML } from './html.js'
 import { UI_CSS } from './styles.js'
 import { UI_APP_JS } from './app.js'
+import { VERSION } from '../../version.js'
+
+export async function openUi(options = {}) {
+  if (options.singleInstance !== false) {
+    const reused = await reuseUiSession(options)
+    if (reused) {
+      options.onListening?.({ url: reused.url, reused: true })
+      return reused
+    }
+  }
+  const started = startUiServer(options)
+  try {
+    await waitForListening(started.server)
+    return started
+  } catch (error) {
+    if (options.singleInstance === false || error.code !== 'EADDRINUSE') throw error
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await delay(100)
+      const reused = await reuseUiSession(options)
+      if (reused) {
+        options.onListening?.({ url: reused.url, reused: true })
+        return reused
+      }
+    }
+    throw new Error(`UI 端口已被占用，且无法确认现有 AI ToolOps 会话：${options.port ?? 4177}`)
+  }
+}
 
 export function startUiServer(options = {}) {
   let projectRoot = path.resolve(options.projectRoot || process.cwd())
@@ -38,6 +67,9 @@ export function startUiServer(options = {}) {
       if (req.method === 'GET' && url.pathname === '/app.js') return sendText(res, 200, UI_APP_JS, 'text/javascript; charset=utf-8')
       if (url.pathname.startsWith('/api/') && req.headers['x-ai-toolops-token'] !== token) return sendJson(res, 403, { error: '会话令牌无效，请从 ai-toolops ui 重新打开页面' })
       if (req.method === 'GET' && url.pathname === '/api/state') return sendJson(res, 200, buildState({ projectRoot, machine, agent }))
+      if (req.method === 'GET' && url.pathname === '/api/session') {
+        return sendJson(res, 200, { ok: true, pid: process.pid, projectRoot })
+      }
       if (req.method === 'POST' && url.pathname === '/api/project/select') {
         const body = await readJsonBody(req)
         projectRoot = validateUiProject(body.project)
@@ -48,6 +80,14 @@ export function startUiServer(options = {}) {
       if (req.method === 'POST' && url.pathname === '/api/project/browse') {
         const selected = await pickDirectory()
         return sendJson(res, 200, { selected })
+      }
+      if (req.method === 'POST' && url.pathname === '/api/update/check') {
+        const release = await checkLatestRelease({ fetchImpl: options.fetchImpl })
+        if (release.status !== 'update-available') return sendJson(res, 200, { release })
+        const plan = planReleaseUpdate(release, { machine, target: options.executable })
+        plans.set(plan.id, { plan, expiresAt: Date.now() + 10 * 60 * 1000 })
+        purgePlans(plans)
+        return sendJson(res, 200, { release, plan })
       }
       if (req.method === 'POST' && url.pathname === '/api/plan') {
         const body = await readJsonBody(req)
@@ -61,9 +101,25 @@ export function startUiServer(options = {}) {
         const cached = plans.get(String(body.planId || ''))
         if (!cached || cached.expiresAt < Date.now()) return sendJson(res, 404, { error: '操作计划不存在或已过期，请重新预览' })
         plans.delete(cached.plan.id)
-        const result = cached.plan.providerId.startsWith('agent.')
-          ? await applyAgentBinding(cached.plan, { machine, confirmed: true })
-          : await applyLifecycle(cached.plan, { machine, confirmed: true })
+        let result
+        if (cached.plan.providerId === 'core.release-update') {
+          result = await applyReleaseUpdate(cached.plan, {
+            machine,
+            confirmed: true,
+            launchHelper: options.launchUpdateHelper !== false,
+            fetchImpl: options.fetchImpl
+          })
+          if (options.launchUpdateHelper !== false) {
+            res.once('finish', () => {
+              options.onUpdateScheduled?.(result)
+              setTimeout(() => server.close(), 100)
+            })
+          }
+        } else {
+          result = cached.plan.providerId.startsWith('agent.')
+            ? await applyAgentBinding(cached.plan, { machine, confirmed: true })
+            : await applyLifecycle(cached.plan, { machine, confirmed: true })
+        }
         return sendJson(res, 200, { ok: true, result })
       }
       return sendJson(res, 404, { error: 'Not found' })
@@ -75,12 +131,11 @@ export function startUiServer(options = {}) {
   server.on('listening', () => {
     const address = server.address()
     const url = `http://127.0.0.1:${address.port}/`
+    if (options.singleInstance !== false) writeUiSession({ port: address.port, token, url }, machine)
     options.onListening?.({ url, token })
-    if (options.open !== false) {
-      const child = spawn('explorer.exe', [url], { detached: true, stdio: 'ignore', windowsHide: true })
-      child.unref()
-    }
+    if (options.open !== false) openBrowser(url)
   })
+  server.on('close', () => clearUiSession(token, machine))
   return { server, token }
 }
 
@@ -90,6 +145,7 @@ export function buildState(options = {}) {
   const machine = readInventory(options.machine || {})
   return {
     schemaVersion: 1,
+    app: { version: VERSION },
     context,
     doctor: { healthy: doctor.healthy, checks: doctor.checks },
     inventory: machine.inventory,
@@ -199,4 +255,24 @@ function readJsonBody(req) {
 
 function purgePlans(plans) {
   for (const [id, item] of plans) if (item.expiresAt < Date.now()) plans.delete(id)
+}
+
+function waitForListening(server) {
+  if (server.listening) return Promise.resolve()
+  return new Promise((resolve, reject) => {
+    const listening = () => {
+      server.off('error', failed)
+      resolve()
+    }
+    const failed = (error) => {
+      server.off('listening', listening)
+      reject(error)
+    }
+    server.once('listening', listening)
+    server.once('error', failed)
+  })
+}
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds))
 }

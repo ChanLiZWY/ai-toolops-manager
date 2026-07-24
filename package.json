@@ -1,6 +1,6 @@
 {
   "name": "ai-toolops-manager",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Windows-local AI tool lifecycle and Agent context manager.",
   "type": "module",
   "bin": {
@@ -12,7 +12,7 @@
     "init:demo": "node bin/ai-toolops.js init",
     "doctor": "node bin/ai-toolops.js doctor",
     "ui": "node bin/ai-toolops.js ui",
-    "check": "node --check bin/ai-toolops.js && node --check src/cli.js && node --check src/args.js && node --check src/setup/bootstrap.js && node --check src/v1/config.js && node --check src/v1/windows-store.js && node --check src/v1/agents.js && node --check src/v1/agent-adapters.js && node --check src/v1/resolver.js && node --check src/v1/doctor.js && node --check src/v1/migration.js && node --check src/v1/transaction.js && node --check src/v1/lifecycle.js && node --check src/v1/migration-executor.js && node --check src/v1/self-update.js && node --check src/v1/providers/registry.js && node --check src/v1/providers/external-command.js && node --check src/v1/providers/rg.js && node --check src/v1/ui/html.js && node --check src/v1/ui/styles.js && node --check src/v1/ui/app.js && node --check src/v1/ui/projects.js && node --check src/v1/ui/server.js && node --check scripts/build-windows.js && node --check scripts/smoke-windows-ui.js && node --check scripts/smoke-windows-setup.js && node --check test/v1-core.test.js && node --check test/v1-lifecycle.test.js && node --check test/v1-distribution.test.js && node --check test/v1-ui.test.js",
+    "check": "node --check bin/ai-toolops.js && node --check src/cli.js && node --check src/args.js && node --check src/version.js && node --check src/setup/bootstrap.js && node --check src/v1/config.js && node --check src/v1/windows-store.js && node --check src/v1/agents.js && node --check src/v1/agent-adapters.js && node --check src/v1/resolver.js && node --check src/v1/doctor.js && node --check src/v1/migration.js && node --check src/v1/transaction.js && node --check src/v1/lifecycle.js && node --check src/v1/migration-executor.js && node --check src/v1/self-update.js && node --check src/v1/release-update.js && node --check src/v1/providers/registry.js && node --check src/v1/providers/external-command.js && node --check src/v1/providers/rg.js && node --check src/v1/ui/html.js && node --check src/v1/ui/styles.js && node --check src/v1/ui/app.js && node --check src/v1/ui/projects.js && node --check src/v1/ui/session.js && node --check src/v1/ui/server.js && node --check scripts/build-windows.js && node --check scripts/smoke-windows-ui.js && node --check scripts/smoke-windows-setup.js && node --check test/v1-core.test.js && node --check test/v1-lifecycle.test.js && node --check test/v1-distribution.test.js && node --check test/v1-release-update.test.js && node --check test/v1-ui.test.js",
     "test": "node --test --test-concurrency=1",
     "setup:project": "node bin/ai-toolops.js init",
     "build:windows": "node scripts/build-windows.js",

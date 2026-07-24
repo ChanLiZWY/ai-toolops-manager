@@ -1,0 +1,71 @@
+name: Windows Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 23
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - name: Verify tag matches application version
+        shell: powershell
+        run: |
+          $packageVersion = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          if ($env:GITHUB_REF_NAME -ne "v$packageVersion") {
+            throw "Tag $env:GITHUB_REF_NAME does not match package version v$packageVersion."
+          }
+      - name: Prepare optional Authenticode certificate
+        id: certificate
+        shell: powershell
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if ($env:CERTIFICATE_BASE64 -and $env:CERTIFICATE_PASSWORD) {
+            $certificate = Join-Path $env:RUNNER_TEMP 'ai-toolops-signing.pfx'
+            [IO.File]::WriteAllBytes($certificate, [Convert]::FromBase64String($env:CERTIFICATE_BASE64))
+            "certificate=$certificate" >> $env:GITHUB_OUTPUT
+            "enabled=true" >> $env:GITHUB_OUTPUT
+            Write-Host 'Authenticode signing is enabled for this release.'
+          } else {
+            "enabled=false" >> $env:GITHUB_OUTPUT
+            Write-Warning 'Authenticode signing secrets are absent; this release will be explicitly unsigned.'
+          }
+      - name: Build installer
+        shell: powershell
+        env:
+          AI_TOOLOPS_SIGN_CERTIFICATE: ${{ steps.certificate.outputs.certificate }}
+          AI_TOOLOPS_SIGN_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: npm run build:windows
+      - run: npm run smoke:windows
+      - name: Verify signature state
+        shell: powershell
+        env:
+          SIGNING_ENABLED: ${{ steps.certificate.outputs.enabled }}
+        run: |
+          $signature = Get-AuthenticodeSignature -LiteralPath dist\ai-toolops-setup.exe
+          if ($env:SIGNING_ENABLED -eq 'true' -and $signature.Status -ne 'Valid') {
+            throw "Expected a valid Authenticode signature, got $($signature.Status)."
+          }
+          if ($env:SIGNING_ENABLED -ne 'true' -and $signature.Status -eq 'Valid') {
+            throw 'Expected an unsigned release because signing secrets were absent.'
+          }
+          Write-Host "Installer signature status: $($signature.Status)"
+      - name: Publish one user-facing asset
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create $env:GITHUB_REF_NAME dist\ai-toolops-setup.exe --verify-tag --generate-notes --title "AI ToolOps Manager $env:GITHUB_REF_NAME"

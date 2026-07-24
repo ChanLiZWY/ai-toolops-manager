@@ -12,6 +12,7 @@ export function windowsPaths(options = {}) {
     root,
     inventory: path.join(root, 'inventory.json'),
     uiState: path.join(root, 'ui.json'),
+    uiSession: path.join(root, 'ui-session.json'),
     tools: path.join(root, 'tools'),
     bin: path.join(root, 'bin'),
     cache: path.join(root, 'cache'),

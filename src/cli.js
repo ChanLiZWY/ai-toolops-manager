@@ -26,9 +26,10 @@ import {
   planAgentBinding
 } from './v1/agent-adapters.js'
 import { applySelfUpdate, planSelfUpdate } from './v1/self-update.js'
-import { startUiServer } from './v1/ui/server.js'
+import { applyReleaseUpdate, checkLatestRelease, planReleaseUpdate } from './v1/release-update.js'
+import { openUi } from './v1/ui/server.js'
+import { VERSION } from './version.js'
 
-const VERSION = '1.0.0'
 const LEGACY_CONTEXT_ALIASES = new Set(['generate-agent-rules', 'sync-agent-rules'])
 const REMOVED_LEGACY_COMMANDS = new Set(['equip', 'unequip', 'toggle', 'reorder-tools', 'register-tool', 'create-slot', 'adapters', 'plugin', 'skill', 'rollback'])
 
@@ -133,6 +134,20 @@ async function lifecycleCommand(action, tool, { projectRoot, flags }) {
 
 async function updateCommand(tool, { projectRoot, flags }) {
   if (tool === 'self') {
+    if (!flags.get('source')) {
+      const release = await checkLatestRelease()
+      if (release.status !== 'update-available') {
+        const message = release.status === 'ahead-of-release'
+          ? `当前版本 ${release.currentVersion} 高于最新稳定版 ${release.latestVersion}`
+          : `当前已是最新版本 ${release.currentVersion}`
+        return output({ ok: true, changed: false, message, release }, flags)
+      }
+      const plan = planReleaseUpdate(release, {
+        target: flagString(flags, 'target')
+      })
+      if (flags.get('dry-run')) return output({ dryRun: true, release, plan }, flags)
+      return output(await applyReleaseUpdate(plan, { confirmed: await confirmPlan(plan, flags), launchHelper: true }), flags)
+    }
     const plan = planSelfUpdate({
       source: flagString(flags, 'source'),
       checksum: flagString(flags, 'checksum'),
@@ -205,12 +220,13 @@ async function agentCommand(args, { projectRoot, flags }) {
   return output(await applyAgentBinding(plan, { confirmed: await confirmPlan(plan, flags) }), flags)
 }
 
-function uiCommand({ projectRoot, flags }) {
-  const result = startUiServer({
+async function uiCommand({ projectRoot, flags }) {
+  const result = await openUi({
     projectRoot,
     agent: String(flags.get('agent') || 'auto'),
     port: Number(flags.get('port') || process.env.AI_TOOLOPS_UI_PORT || 4177),
     open: !flags.get('no-open') && process.env.AI_TOOLOPS_UI_NO_OPEN !== '1',
+    switchProject: flags.has('project'),
     onListening: ({ url }) => console.log(`AI ToolOps UI: ${url}`)
   })
   return result
@@ -281,7 +297,7 @@ Commands:
   ai-toolops context [--agent auto] [--json]   输出当前 Agent 的能力上下文
   ai-toolops doctor [--strict] [--json]        只读检查项目、电脑和 Agent 状态
   ai-toolops install <tool> [--dry-run]         安装工具
-  ai-toolops update [tool|--all|self]           更新工具或 ToolOps
+  ai-toolops update [tool|--all|self]           更新工具；self 主动检查稳定版 Release
   ai-toolops uninstall <tool>                   卸载工具
   ai-toolops bootstrap --locked                 按锁文件恢复电脑环境
   ai-toolops migrate --dry-run                  预检旧项目迁移

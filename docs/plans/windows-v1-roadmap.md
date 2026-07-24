@@ -3,10 +3,10 @@
 ## 当前状态
 
 ```yaml
-current_phase: phase-4
-current_status: implementation_complete
-last_completed_task: phase-4.task-5
-next_task: external-windows-matrix
+current_phase: windows-v1.1-p0
+current_status: ready_for_release
+last_completed_task: windows-v1.1-p0.task-5
+next_task: release-v1.1.0
 blocked: false
 block_reason: null
 last_updated: 2026-07-24

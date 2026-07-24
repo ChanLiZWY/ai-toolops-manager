@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.1.0 - 2026-07-24
+
+- UI 重复启动改为复用现有本地实例，并可转发显式项目切换。
+- 增加主动 GitHub 稳定版检查、Release 安装资产 SHA-256 digest 校验和退出后安装器升级。
+- 退出后安装在 helper 完成前只记录 `scheduled`，最终成功或失败由 helper 回写，避免伪成功回执。
+- 设置页显示当前版本和检查更新入口；普通状态读取不联网。
+- 增加 Windows 2022/2025 Runner CI、Tag Release 和可选 Authenticode 签名钩子。
+- Release 工作流只上传 `ai-toolops-setup.exe` 一个用户资产。
+- 完成 Provider 准入评审；不为数量接管 Semble、AskHuman、Git、GitHub CLI 或重复型 CLI。
+
 ## 1.0.0 - 2026-07-24
 
 - 产品范围收敛为 Windows 10/11 x64 普通用户安装。

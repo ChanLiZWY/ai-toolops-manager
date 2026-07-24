@@ -47,6 +47,7 @@ export async function executeTransaction(plan, executor, options = {}) {
   writeReceipt(receiptFile, receipt)
   const context = {
     receipt,
+    receiptFile,
     step(name, data = {}) {
       receipt.steps.push({ name, at: new Date().toISOString(), ...data })
       writeReceipt(receiptFile, receipt)
@@ -54,8 +55,8 @@ export async function executeTransaction(plan, executor, options = {}) {
   }
   try {
     const result = await executor(context)
-    receipt.status = 'succeeded'
-    receipt.finishedAt = new Date().toISOString()
+    receipt.status = result?.deferredCompletion ? 'scheduled' : 'succeeded'
+    receipt.finishedAt = result?.deferredCompletion ? null : new Date().toISOString()
     receipt.result = sanitizeReceiptData(result)
     writeReceipt(receiptFile, receipt)
     return { plan, receipt, receiptFile, result }

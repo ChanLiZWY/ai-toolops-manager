@@ -5,6 +5,7 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { VERSION } from '../src/version.js'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const setupExecutable = path.join(root, 'dist', 'ai-toolops-setup.exe')
@@ -48,11 +49,11 @@ try {
     timeout: 30000
   })
   assert.equal(version.status, 0, version.stderr)
-  assert.match(version.stdout, /1\.0\.0/)
+  assert.equal(version.stdout.trim(), VERSION)
 
   const registry = readRegistry()
   assert.equal(registry.DisplayName, 'AI ToolOps Manager')
-  assert.equal(registry.DisplayVersion, '1.0.0')
+  assert.equal(registry.DisplayVersion, VERSION)
   assert.equal(path.resolve(registry.InstallLocation), path.resolve(installRoot))
 
   const shortcutTarget = readShortcutTarget(startMenuShortcut)
